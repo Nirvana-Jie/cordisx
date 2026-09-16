@@ -1,3 +1,4 @@
+import { loadManagedSourceTrustNow } from '../launcher/managed-source-trust.js'
 import path from 'node:path'
 import {
   createNativeSubmissionComposition,
@@ -42,7 +43,7 @@ import {
   terminateIsolatedCodex,
 } from '../launcher/process.js'
 import { settleInjectedHostCleanup } from './injected-host-cleanup.js'
-import { type CordisXDevInvocation, type CordisXLauncherOptions, parseCordisXCli } from './parse.js'
+import { type CordisXDevInvocation, type CordisXLauncherOptions } from './parse.js'
 import { ProviderFleet } from '../providers/fleet.js'
 import { resolveLocalCodexProviderConfig } from '../providers/config.js'
 import type { CodexProviderConfig } from '../providers/contracts.js'
@@ -148,33 +149,11 @@ import {
   waitForExit,
   waitForHostExitAfterReadiness,
 } from './run-support.js'
-import { prepareRunCommand } from './run-command-dispatch.js'
-import { isSupervisorCommand, runSupervisorCommand } from './supervisor-command.js'
+import { prepareCliCommand } from './run-command-dispatch.js'
 import { createSupervisorRuntime } from './supervisor-runtime.js'
 
 export async function runCordisXCli(argv: readonly string[], runtime: CordisXCliRuntime = {}): Promise<void> {
-  const parsedInvocation = parseCordisXCli(argv)
-  const internalForeground = [
-    runtime.internalRunInjectedHost,
-    runtime.internalAgentHistoryHost,
-    runtime.internalBuiltinSkillSourceDir,
-    runtime.internalSharedHomeDir,
-    runtime.internalBuildRendererBundle,
-    runtime.internalObserveOwnerDocuments,
-  ].some(value => value !== undefined)
-  const foregroundStart = parsedInvocation.action === 'start'
-    && (parsedInvocation.options.dryRun || parsedInvocation.options.attach || internalForeground)
-  if (isSupervisorCommand(parsedInvocation) && !foregroundStart) {
-    await runSupervisorCommand(parsedInvocation, runtime)
-    return
-  }
-  const foregroundInvocation = (parsedInvocation.action === 'run' || foregroundStart
-    ? { ...parsedInvocation, action: 'launch' as const }
-    : parsedInvocation) as Exclude<
-      typeof parsedInvocation,
-      { readonly action: 'run' | 'start' | 'status' | 'logs' | 'stop' | 'restart' }
-    >
-  const prepared = await prepareRunCommand(foregroundInvocation, runtime)
+  const prepared = await prepareCliCommand(argv, runtime)
   if (prepared === undefined) return
   const { invocation, stdout, environment, configPath, selection, adapter, appId } = prepared
   const supervisorRuntime = await createSupervisorRuntime(environment)
@@ -559,6 +538,14 @@ export async function runCordisXCli(argv: readonly string[], runtime: CordisXCli
         },
       })
     const ownerDocumentHandler = createOwnerDocumentBridgeHandler({
+      onDiagnostic: event => stdout(`[cordisx] HTTP transport ${JSON.stringify(event)}`),
+      localWalletHomeDir: rootFromConfigPath(configPath),
+      managedSourcesNow: () => loadManagedSourceTrustNow(rootFromConfigPath(configPath), selection.profileId),
+      managedSources: async () =>
+        (await import('../launcher/managed-source-trust.js')).loadManagedSourceTrust(
+          rootFromConfigPath(configPath),
+          selection.profileId,
+        ),
       plugins: composition.plugins,
       secret: rendererComposition.ownerDocumentSecret,
       profileId: selection.profileId,
@@ -792,6 +779,7 @@ export async function runCordisXCli(argv: readonly string[], runtime: CordisXCli
       try {
         assertProductionGraphLaunchOwnership(true, rendererComposition.hasLoopbackGraph)
       } catch (error) {
+        ownerDocuments.walletSpend?.dispose()
         await ownerDocuments.http.dispose()
         await ownerDocuments.agentTools?.close()
         await channelService?.dispose()
@@ -801,6 +789,7 @@ export async function runCordisXCli(argv: readonly string[], runtime: CordisXCli
       const debugPort = invocation.options.debugPort ?? composition.codex.debugPort
       if (invocation.options.dryRun) {
         stdout(JSON.stringify({ status: 'ready', mode: 'attach', appId, debugPort }, null, 2))
+        ownerDocuments.walletSpend?.dispose()
         await ownerDocuments.http.dispose()
         await ownerDocuments.agentTools?.close()
         await channelService?.dispose()
@@ -854,6 +843,7 @@ export async function runCordisXCli(argv: readonly string[], runtime: CordisXCli
           stdout,
         })
       } finally {
+        ownerDocuments.walletSpend?.dispose()
         await ownerDocuments.http.dispose()
         await ownerDocuments.agentTools?.close()
         await channelService?.dispose()
@@ -880,6 +870,7 @@ export async function runCordisXCli(argv: readonly string[], runtime: CordisXCli
     printPlan(plan, stdout, invocation.options.dryRun ? 'ready' : 'launching')
     if (invocation.options.dryRun) {
       stdout(`[cordisx] loopback CDP port: ${invocation.options.debugPort ?? 'automatic'}`)
+      ownerDocuments.walletSpend?.dispose()
       await ownerDocuments.http.dispose()
       await ownerDocuments.agentTools?.close()
       await channelService?.dispose()
@@ -981,6 +972,7 @@ export async function runCordisXCli(argv: readonly string[], runtime: CordisXCli
       profileLeaseHandedOff = profileLease !== undefined
       await runHost(runHostInput)
     } finally {
+      ownerDocuments.walletSpend?.dispose()
       await ownerDocuments.http.dispose()
       if (profileLease !== undefined && !profileLeaseHandedOff) await profileLease.release()
       await ownerDocuments.agentTools?.close()

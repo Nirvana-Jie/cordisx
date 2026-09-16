@@ -43,6 +43,7 @@ import Import from 'reicon/icons/Import'
 import Key from 'reicon/icons/Key'
 import Layers from 'reicon/icons/Layers'
 import Link from 'reicon/icons/Link'
+import Logout4 from 'reicon/icons/Logout4'
 import Loader from 'reicon/icons/Loader'
 import Login from 'reicon/icons/Login'
 import MinusCircle from 'reicon/icons/MinusCircle'
@@ -160,6 +161,7 @@ export const BUILTIN_HOST_SURFACE_ICON_KEYS = [
   'host:folder-open',
   'host:hierarchy',
   'host:link',
+  'host:log-out',
   'host:loader',
   'host:log-in',
   'host:marketplace',
@@ -187,6 +189,7 @@ const HOST_SURFACE_GLYPHS = Object.freeze(
     'host:folder-open': FolderOpen,
     'host:hierarchy': DiagramTree,
     'host:link': Link,
+    'host:log-out': Logout4,
     'host:loader': Loader,
     'host:log-in': Login,
     'host:marketplace': Shop,

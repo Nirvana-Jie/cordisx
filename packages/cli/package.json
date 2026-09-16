@@ -45,6 +45,10 @@
     "./agent-tools": {
       "types": "./dist/src/agent-tools.d.ts",
       "default": "./dist/src/agent-tools.js"
+    },
+    "./wallet-spend-provider/v1": {
+      "types": "./dist/src/wallet-spend-provider.d.ts",
+      "default": "./dist/src/wallet-spend-provider.js"
     }
   },
   "scripts": {
@@ -85,7 +89,7 @@
     "provenance": true
   },
   "dependencies": {
-    "@cordisx/protocol": "0.1.0-beta.3",
+    "@cordisx/protocol": "github:cordisx/cordisx-protocol#55621cd211d48783eb0f729f2925b54bd621a810",
     "@cordisx/schemastery-ui": "0.1.0-beta.3",
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/schemastery": "^3.18.1",

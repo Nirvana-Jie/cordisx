@@ -30,6 +30,7 @@ import type {
   CordisXMessageDefinition,
   CordisXOutletName,
   CordisXPageHeaderAction,
+  CordisXPageHeaderActionV4,
   CordisXPageMetadata,
   CordisXPageMount,
   CordisXPageMountContext,
@@ -118,6 +119,9 @@ export function assertKeys(value: object, allowed: readonly string[], label: str
 }
 
 export function assertPageMetadataVersion(metadata: CordisXPageMetadata): void {
+  if (metadata.contentInset !== undefined && metadata.schemaVersion !== 4) {
+    throw new Error('page contentInset requires page.v4')
+  }
   const hasSchema = metadata.$schema !== undefined
   const hasVersion = metadata.schemaVersion !== undefined
   if (!hasSchema && !hasVersion) {
@@ -137,7 +141,10 @@ export function assertPageMetadataVersion(metadata: CordisXPageMetadata): void {
     if (metadata.description !== undefined) throw new Error('page.v2 cannot declare description')
     return
   }
-  if (metadata.schemaVersion === 3 && metadata.$schema === CORDISX_PAGE_SCHEMA_V3) {
+  if (
+    (metadata.schemaVersion === 3 && metadata.$schema === CORDISX_PAGE_SCHEMA_V3)
+    || (metadata.schemaVersion === 4 && metadata.$schema === CORDISX_PAGE_SCHEMA_V4)
+  ) {
     if (metadata.description === undefined) throw new Error('page.v3 requires localized description metadata')
     if (metadata.localeNamespace !== undefined) {
       throw new Error('page.v3 uses owner-default i18n and cannot declare localeNamespace')
@@ -282,17 +289,85 @@ function clonePageIcon(metadata: CordisXPageMetadata): BrandIconV1 | undefined {
   return icon
 }
 
-function assertPageHeaderAction(action: CordisXPageHeaderAction, label: string): void {
-  assertKeys(action, ['id', 'label', 'ariaLabel', 'icon', 'command', 'when', 'disabled'], label)
+export function assertPageHeaderAction(action: CordisXPageHeaderActionV4, label: string, v4 = false): void {
+  assertKeys(action, [
+    'id',
+    'label',
+    'ariaLabel',
+    'icon',
+    'command',
+    'when',
+    'disabled',
+    ...(v4 ? ['visual', 'menu', 'presentation', 'variant', 'tooltip'] : []),
+  ], label)
+  if ('presentation' in action && action.presentation !== undefined) {
+    if (!['icon', 'primary', 'text'].includes(action.presentation) || action.menu !== undefined) {
+      throw new Error(`${label} presentation requires a command action`)
+    }
+    if (action.presentation === 'primary' && action.visual !== undefined) {
+      throw new Error(`${label} primary action cannot use an identity visual`)
+    }
+  }
+  if (action.presentation === 'text' && action.visual !== undefined && action.visual.kind !== 'image') {
+    throw new Error(`${label} text action requires an image visual`)
+  }
+  if ('variant' in action && action.variant !== undefined) {
+    if (action.variant !== 'outlined' || action.presentation !== 'primary' || action.menu !== undefined) {
+      throw new Error(`${label} variant requires an outlined primary command action`)
+    }
+  }
+  if (action.tooltip !== undefined) {
+    if (action.presentation !== 'text' || action.menu !== undefined) {
+      throw new Error(`${label} tooltip requires a text command action`)
+    }
+    assertLocalizedText(action.tooltip, `${label} tooltip`)
+  }
+  if (action.visual !== undefined) {
+    assertKeys(
+      action.visual,
+      ['kind', 'src', ...(action.presentation === 'text' ? ['position'] : [])],
+      `${label} visual`,
+    )
+    if (
+      action.presentation === 'text' && action.visual.position !== undefined
+      && !['leading', 'trailing'].includes(action.visual.position)
+    ) {
+      throw new Error(`${label} visual position is invalid`)
+    }
+    if (!['avatar', 'image'].includes(action.visual.kind)) throw new Error(`${label} visual kind is invalid`)
+    if (action.icon !== undefined) throw new Error(`${label} cannot combine icon and visual`)
+    const src = action.visual.src
+    if (
+      (action.visual.kind === 'image' && src === undefined) || (src !== undefined
+        && (typeof src !== 'string' || src.length > 262144
+          || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(src)))
+    ) {
+      throw new Error(`${label} requires a bounded inline raster image`)
+    }
+  }
   assertLocalId(action.id, `${label} id`)
   assertLocalizedText(action.label, `${label} label`)
   if (action.ariaLabel !== undefined) assertLocalizedText(action.ariaLabel, `${label} ariaLabel`)
   assertHostIcon(action.icon, label)
-  if (action.command === null || typeof action.command !== 'object') {
-    throw new Error(`${label} requires a command reference`)
+  if (action.menu !== undefined) {
+    if (
+      action.command !== undefined || !Array.isArray(action.menu) || action.menu.length < 1 || action.menu.length > 12
+    ) {
+      throw new Error(`${label} requires either a command or 1–12 menu items`)
+    }
+    const ids = new Set<string>()
+    for (const item of action.menu) {
+      assertPageHeaderAction(item, `${label} menu item`)
+      if (ids.has(item.id)) throw new Error(`${label} has duplicate menu item ${item.id}`)
+      ids.add(item.id)
+    }
+  } else {
+    if (action.command === null || typeof action.command !== 'object') {
+      throw new Error(`${label} requires a command reference`)
+    }
+    assertKeys(action.command, ['id', 'arguments'], `${label} command`)
+    assertReference(action.command.id, `${label} command id`)
   }
-  assertKeys(action.command, ['id', 'arguments'], `${label} command`)
-  assertReference(action.command.id, `${label} command id`)
   assertWhenExpression(action.when)
   if (action.disabled !== undefined) {
     assertKeys(action.disabled, ['value', 'reason'], `${label} disabled state`)
@@ -307,34 +382,14 @@ export function pageChromeButton(document: Document, ariaLabel: string, icon: st
   button.setAttribute('aria-label', ariaLabel)
   button.dataset.cordisxNoDrag = 'true'
   button.style.setProperty('-webkit-app-region', 'no-drag')
-  const Button = document.defaultView?.HTMLButtonElement
-  const template = [...document.querySelectorAll('header[data-app-shell-application-menu-bar] button')]
-    .find((candidate): candidate is HTMLButtonElement =>
-      Button !== undefined
-      && candidate instanceof Button
-      && candidate.closest('[data-cordisx-page-outlet]') === null
-    )
-  if (template !== undefined) {
-    button.className = template.className
-  } else {
-    Object.assign(button.style, {
-      width: '30px',
-      height: '30px',
-      border: '1px solid transparent',
-      borderRadius: '8px',
-      background: 'transparent',
-      color: 'inherit',
-      cursor: 'pointer',
-      padding: '5px',
-    })
-  }
+  // Native geometry is projected by the adapter; sidebar-button classes are not a page contract.
   button.classList.add('cordisx-page-chrome-action')
   button.append(createHostSurfaceIcon(document, icon))
   return button
 }
 
 export const STANDARD_PAGE_CLIP_PATH =
-  'polygon(var(--cordisx-page-chrome-safe-left, 0px) 0, 100% 0, 100% 100%, 0 100%, 0 46px, var(--cordisx-page-chrome-safe-left, 0px) 46px)'
+  'polygon(var(--cordisx-page-chrome-safe-left, 0px) 0, 100% 0, 100% 100%, 0 100%, 0 var(--cordisx-page-chrome-height, 46px), var(--cordisx-page-chrome-safe-left, 0px) var(--cordisx-page-chrome-height, 46px))'
 
 export class PageRegistry {
   private readonly records = new Map<string, PageRecord>()
@@ -368,6 +423,7 @@ export class PageRegistry {
       'description',
       'icon',
       'chrome',
+      'contentInset',
       'breadcrumbs',
       'tabs',
       'headerActions',
@@ -378,6 +434,9 @@ export class PageRegistry {
     assertLocalizedText(metadata.title, 'page title')
     if (metadata.description !== undefined) assertLocalizedText(metadata.description, 'page description')
     const icon = clonePageIcon(metadata)
+    if (metadata.contentInset !== undefined && !['standard', 'none'].includes(metadata.contentInset)) {
+      throw new Error(`page ${metadata.id} content inset is invalid`)
+    }
     if (metadata.chrome !== undefined && !['standard', 'body-only'].includes(metadata.chrome)) {
       throw new Error(`page ${metadata.id} chrome policy is invalid`)
     }
@@ -398,9 +457,16 @@ export class PageRegistry {
       assertLocalizedText(tab.label, 'page tab label')
       assertHostIcon(tab.icon, 'page tab')
     }
+    if (
+      (metadata.headerActions ?? []).filter(action => 'presentation' in action && action.presentation === 'primary')
+        .length > 1
+    ) {
+      throw new Error('page supports at most one primary header action')
+    }
     const actionIds = new Set<string>()
+    if ((metadata.headerActions?.length ?? 0) > 12) throw new Error('page supports at most 12 header actions')
     for (const action of metadata.headerActions ?? []) {
-      assertPageHeaderAction(action, 'page header action')
+      assertPageHeaderAction(action, 'page header action', metadata.schemaVersion === 4)
       if (actionIds.has(action.id)) throw new Error(`page ${metadata.id} has duplicate header action ${action.id}`)
       actionIds.add(action.id)
     }

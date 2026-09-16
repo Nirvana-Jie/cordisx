@@ -488,6 +488,46 @@ export interface CordisXPageHeaderAction extends CordisXStructuredAction {
   readonly disabled?: CordisXDisabledState
 }
 
+/** page.v4 visuals are bounded inline raster data; avatar without src is anonymous. */
+export type CordisXPageHeaderVisual =
+  | { readonly kind: 'avatar'; readonly src?: string }
+  | { readonly kind: 'image'; readonly src: string }
+
+export type CordisXPageHeaderTextVisual = Extract<CordisXPageHeaderVisual, { readonly kind: 'image' }> & {
+  readonly position?: 'leading' | 'trailing'
+}
+
+export type CordisXPageHeaderActionV4 =
+  | (CordisXPageHeaderAction & {
+    readonly visual?: CordisXPageHeaderVisual
+    readonly menu?: never
+    readonly presentation?: 'icon'
+    readonly variant?: never
+    readonly tooltip?: never
+  })
+  | (CordisXPageHeaderAction & {
+    readonly visual?: never
+    readonly menu?: never
+    readonly presentation: 'primary'
+    readonly variant?: 'outlined'
+    readonly tooltip?: never
+  })
+  | (CordisXPageHeaderAction & {
+    readonly visual?: CordisXPageHeaderTextVisual
+    readonly menu?: never
+    readonly presentation: 'text'
+    readonly variant?: never
+    readonly tooltip?: CordisXLocalizedText
+  })
+  | (Omit<CordisXPageHeaderAction, 'command'> & {
+    readonly command?: never
+    readonly presentation?: never
+    readonly variant?: never
+    readonly tooltip?: never
+    readonly visual?: CordisXPageHeaderVisual
+    readonly menu: readonly CordisXPageHeaderAction[]
+  })
+
 export const CORDISX_PAGE_SCHEMA_V1 =
   'https://raw.githubusercontent.com/cordisx/cordisx-protocol/main/schemas/page.v1.schema.json' as const
 
@@ -632,21 +672,24 @@ export interface CordisXPageMetadata {
   readonly icon?: BrandIconV1
   /** Host-rendered chrome policy. Body-only remains subject to the target outlet policy. */
   readonly chrome?: CordisXPageChrome
+  /** Page v4 Host body inset; omission preserves the existing standard padding. */
+  readonly contentInset?: 'standard' | 'none'
   /** Explicitly empty marks a navigation root whose Host chrome keeps the page icon instead of Back. */
   readonly breadcrumbs?: readonly CordisXLocalizedText[]
   readonly tabs?: readonly CordisXPageTab[]
-  readonly headerActions?: readonly CordisXPageHeaderAction[]
+  readonly headerActions?: readonly CordisXPageHeaderActionV4[]
   readonly localeNamespace?: string
 }
 
 export type CordisXPageMetadataV3 =
   & Omit<
     CordisXPageMetadata,
-    '$schema' | 'schemaVersion' | 'description' | 'icon' | 'localeNamespace'
+    '$schema' | 'schemaVersion' | 'description' | 'icon' | 'localeNamespace' | 'headerActions' | 'contentInset'
   >
   & {
     readonly $schema: typeof CORDISX_PAGE_SCHEMA_V3
     readonly schemaVersion: 3
+    readonly headerActions?: readonly CordisXPageHeaderAction[]
     readonly description: CordisXLocalizedText
     readonly icon?: CordisXIconToken
   }
@@ -686,6 +729,12 @@ export interface CordisXPageSelectControl<Value extends CordisXJsonScalar = Cord
 }
 
 export interface CordisXPageControls {
+  /** Replaces the title with bounded breadcrumbs and an owner-scoped Back route. */
+  setHeaderBreadcrumbs(items: readonly CordisXLocalizedText[], back: CordisXRouteReference): boolean
+  /** Updates only an existing visual action in this live mounted standard page. */
+  setHeaderActionVisual(actionId: string, visual: CordisXPageHeaderVisual | CordisXPageHeaderTextVisual): boolean
+  /** Updates a declared top-level command or menu trigger label in the current mounted standard header. */
+  setHeaderActionLabel(actionId: string, label: CordisXLocalizedText, ariaLabel?: CordisXLocalizedText): boolean
   select<Value extends CordisXJsonScalar>(options: {
     readonly id?: string
     readonly label: string

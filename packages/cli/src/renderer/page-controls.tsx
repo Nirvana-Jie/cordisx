@@ -1,6 +1,14 @@
 import { createRoot, type Root } from 'react-dom/client'
 import { ConfigProvider, Select } from 'tdesign-react'
-import type { CordisXJsonScalar, CordisXPageControls, CordisXPageSelectControl } from '../contracts.js'
+import type {
+  CordisXJsonScalar,
+  CordisXLocalizedText,
+  CordisXPageControls,
+  CordisXPageHeaderTextVisual,
+  CordisXPageHeaderVisual,
+  CordisXPageSelectControl,
+  CordisXRouteReference,
+} from '../contracts.js'
 
 interface PageSelectOptions<Value extends CordisXJsonScalar> {
   readonly id?: string
@@ -79,7 +87,35 @@ export class HostPageControls implements CordisXPageControls {
   private readonly controls = new Set<CordisXPageSelectControl>()
   private closed = false
 
-  constructor(private readonly document: Document, _portalParent?: HTMLElement) {}
+  constructor(
+    private readonly document: Document,
+    _portalParent?: HTMLElement,
+    private readonly updateHeaderVisual?: (
+      id: string,
+      visual: CordisXPageHeaderVisual | CordisXPageHeaderTextVisual,
+    ) => boolean,
+    private readonly updateBreadcrumbs?: (
+      items: readonly CordisXLocalizedText[],
+      back: CordisXRouteReference,
+    ) => boolean,
+    private readonly updateHeaderLabel?: (
+      id: string,
+      label: CordisXLocalizedText,
+      ariaLabel?: CordisXLocalizedText,
+    ) => boolean,
+  ) {}
+
+  setHeaderBreadcrumbs(items: readonly CordisXLocalizedText[], back: CordisXRouteReference): boolean {
+    return !this.closed && (this.updateBreadcrumbs?.(items, back) ?? false)
+  }
+
+  setHeaderActionVisual(id: string, visual: CordisXPageHeaderVisual | CordisXPageHeaderTextVisual): boolean {
+    return !this.closed && (this.updateHeaderVisual?.(id, visual) ?? false)
+  }
+
+  setHeaderActionLabel(id: string, label: CordisXLocalizedText, ariaLabel?: CordisXLocalizedText): boolean {
+    return !this.closed && (this.updateHeaderLabel?.(id, label, ariaLabel) ?? false)
+  }
 
   select<Value extends CordisXJsonScalar>(options: {
     readonly id?: string

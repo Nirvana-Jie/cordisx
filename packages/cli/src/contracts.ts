@@ -1,4 +1,5 @@
 export type * from './dialog-contracts.js'
+export type * from './current-user-contracts.js'
 export * from './usage-contracts.js'
 export { CORDISX_PLUGIN_MANIFEST_SCHEMA_V11, type CordisXPluginManifestV11 } from './agent-task-permission-manifest.js'
 export {
@@ -318,6 +319,9 @@ export type {
   CordisXOutletName,
   CordisXPageControls,
   CordisXPageHeaderAction,
+  CordisXPageHeaderActionV4,
+  CordisXPageHeaderTextVisual,
+  CordisXPageHeaderVisual,
   CordisXPageMetadata,
   CordisXPageMetadataV3,
   CordisXPageMetadataV4,
@@ -403,6 +407,8 @@ export type { RouteLinkResolutionResult } from '@cordisx/protocol/route-link-res
 
 export type * from './entity-execution-context-contracts.js'
 export type * from './plugin-http-contracts.js'
+export type * from './wallet-spend-contracts.js'
+export type * from './work-settlement-contracts.js'
 
 export type * from './agent-loop-control-contracts.js'
 

@@ -1,12 +1,13 @@
+import { isolateRuntimeOwnerServices } from './runtime-owner-context.js'
+import { disposePluginProfileSurfaces, installPluginProfileSurfaces } from './plugin-profile-surfaces.js'
 import { installPluginDialogs } from './dialogs/plugin.js'
 import { notificationCenterForDocument } from './notifications/host.js'
 import { nativeAgentTaskClient } from './native-agent-session-recovery.js'
-import { createRestrictedContentService } from './restricted-content-service.js'
-import { createPluginHttpClient } from './plugin-http.js'
+import { disposePluginTransports, installPluginTransports } from './plugin-transports.js'
 import { installAgentTasks } from './agent-tasks-install.js'
 import { registerNativeSessionOwner } from './native-agent-session-recovery.js'
 import { installAgentTools } from './plugin-agent-tools.js'
-import { Context, type Fiber, type Plugin } from '@deepseek-ai/cordis'
+import { Context, type Fiber, type FiberState, type Plugin } from '@deepseek-ai/cordis'
 import { CORDISX_PLATFORM_CAPABILITIES, CORDISX_PLUGIN_ACTIVATION_SCHEMA_V1 } from '../contracts.js'
 import type {
   CordisXBrowserPlugin,
@@ -517,33 +518,13 @@ export const createRuntimeMountPlugin = async (
       }
     },
   })
-  pluginContext = runtimeScope.ctx.isolate('connectors').isolate('agentLoop').isolate('managedServices').isolate(
-    'modelProviders',
-  ).isolate(
-    'agents',
-  )
-    .isolate('sessions')
-    .isolate('agentSessionDetailReferences').isolate('agentDetailNavigation').isolate('approvals')
-    .isolate('agentAdmission').isolate('agentAdmissionOrigins').isolate('agentAdmissionReservations')
-    .isolate('agentAdmissionBootstrapTargets').isolate('agentAdmissionBootstrapReservations')
-    .isolate('agentAdmissionBootstrapRoomTargets').isolate('agentAdmissionBootstrapRoomReservations')
-    .isolate('agentAdmissionBootstrapRouteDeclarations').isolate('agentAdmissionBootstrapRouteReservations')
-    .isolate('agentPageAdmissionTargets').isolate('agentPageAdmissionReservations')
-    .isolate('agentPageAdmissionRouteDeclarations').isolate('agentPageAdmissionRouteReservations')
-    .isolate('agentPageFreshRoomNavigation')
-    .isolate('entityExecutionContexts').isolate('agentTaskApprovals').isolate('agentTaskOwnership').isolate(
-      'agentTasks',
-    ).isolate('agentTools').isolate(
-      'entities',
-    ).isolate('documents').isolate('http').isolate('agentLoopControl').isolate('restrictedContent').isolate(
-      'notifications',
-    ).isolate('dialogs').extend({
-      [CORDISX_PLUGIN_ID]: controller.item.id,
-      [CORDISX_PLUGIN_SOURCE]: controller.item.source,
-      [CORDISX_PLUGIN_GENERATION]: runtimeScope.moduleGenerationOf()!(controller),
-      [CORDISX_PLUGIN_PRINCIPAL]: controller.principal,
-      ...(controller.generationContext ?? {}),
-    })
+  pluginContext = isolateRuntimeOwnerServices(runtimeScope.ctx).extend({
+    [CORDISX_PLUGIN_ID]: controller.item.id,
+    [CORDISX_PLUGIN_SOURCE]: controller.item.source,
+    [CORDISX_PLUGIN_GENERATION]: runtimeScope.moduleGenerationOf()!(controller),
+    [CORDISX_PLUGIN_PRINCIPAL]: controller.principal,
+    ...(controller.generationContext ?? {}),
+  })
   controller.connectorClient = connectorClient
   controller.unregisterConnector = pluginContext.reflect.provide('connectors', connectorClient)
   controller.agentLoopClient = agentLoopClient
@@ -592,11 +573,7 @@ export const createRuntimeMountPlugin = async (
     name: () => controller.manifest.name ?? controller.item.id,
     active: () => agentLoopOptions.active() && runtimeScope.activeControllers()().includes(controller),
   }, notificationBinding?.api)
-  controller.restrictedContent = createRestrictedContentService(agentLoopOptions.active)
-  controller.unregisterRestrictedContent = pluginContext.reflect.provide(
-    'restrictedContent',
-    controller.restrictedContent,
-  )
+  installPluginProfileSurfaces(pluginContext, controller, document, agentLoopOptions)
   controller.documentsClient = documentsClient
   controller.unregisterDocuments = pluginContext.reflect.provide('documents', documentsClient)
   const managedServices = runtimeScope.managedServiceBridge()?.bind({
@@ -628,21 +605,33 @@ export const createRuntimeMountPlugin = async (
       entityPrincipal,
       () => controller.principalLive,
     )
-    const http = createPluginHttpClient({
+    installPluginTransports(pluginContext, controller, {
+      diagnostic: (_, message) =>
+        runtimeScope.pluginConsole()!.diagnostic(controller.principal, 'http.transport', message),
+      authorizeWork: async () => {
+        const broker = runtimeScope.broker()!, generation = runtimeScope.moduleGenerationOf()!(controller)
+        const fence = broker.usageFence(controller.identity, generation)
+        return fence() && await broker.authorizeUsage(controller.identity) && fence()
+          && broker.usageAllowed(controller.identity)
+      },
       development: () =>
         runtimeScope.broker()!.isLocalDevelopment(
           controller.identity,
           runtimeScope.moduleGenerationOf()!(controller),
           controller.generationView,
         ),
+      workPermissionFence: () =>
+        runtimeScope.broker()!.usageOperationFence(
+          controller.identity,
+          runtimeScope.moduleGenerationOf()!(controller),
+        ),
+      subscribeWorkPermission: listener => runtimeScope.broker()!.subscribe(listener),
       bridge: runtimeScope.ownerDocumentBridge(),
       principal: entityPrincipal,
       active: () => controller.principalLive,
       configuredOrigins: () =>
         runtimeScope.configuration()!.configuredHttpOrigins(controller.item.id, controller.generationView),
     })
-    controller.httpClient = http
-    controller.unregisterHttp = pluginContext.reflect.provide('http', http)
     const tools = installAgentTools(pluginContext, {
       bridge: runtimeScope.ownerDocumentBridge()!,
       principal: entityPrincipal,
@@ -862,18 +851,12 @@ export const createRuntimeMountPlugin = async (
     delete controller.unregisterAgentSessionMigration
     agentLoopClient.dispose()
     delete controller.agentLoopClient
-    controller.httpClient?.dispose()
-    delete controller.httpClient
-    await controller.unregisterHttp?.()
-    delete controller.unregisterHttp
+    await disposePluginTransports(controller)
     controller.unregisterDialogs?.()
     delete controller.unregisterDialogs
     controller.unregisterNotifications?.()
     delete controller.unregisterNotifications
-    controller.restrictedContent?.dispose()
-    await controller.unregisterRestrictedContent?.()
-    delete controller.restrictedContent
-    delete controller.unregisterRestrictedContent
+    await disposePluginProfileSurfaces(controller)
     controller.agentLoopControl?.dispose()
     await controller.unregisterAgentLoopControl?.()
     delete controller.agentLoopControl

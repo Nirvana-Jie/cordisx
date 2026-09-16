@@ -1,3 +1,5 @@
+import { disposePluginTransports } from './plugin-transports.js'
+import { disposePluginProfileSurfaces } from './plugin-profile-surfaces.js'
 import type { RuntimeClosureScope } from './runtime-closure-scope.js'
 import type { PluginController } from './runtime-shared.js'
 
@@ -54,18 +56,12 @@ export const createRuntimeDisposeControllerFiber = async (
     delete controller.unregisterAgentSessionMigration
     controller.agentLoopClient?.dispose()
     delete controller.agentLoopClient
-    controller.httpClient?.dispose()
-    delete controller.httpClient
-    await controller.unregisterHttp?.()
-    delete controller.unregisterHttp
+    await disposePluginTransports(controller)
     controller.unregisterDialogs?.()
     delete controller.unregisterDialogs
     controller.unregisterNotifications?.()
     delete controller.unregisterNotifications
-    controller.restrictedContent?.dispose()
-    await controller.unregisterRestrictedContent?.()
-    delete controller.restrictedContent
-    delete controller.unregisterRestrictedContent
+    await disposePluginProfileSurfaces(controller)
     controller.agentLoopControl?.dispose()
     await controller.unregisterAgentLoopControl?.()
     delete controller.agentLoopControl

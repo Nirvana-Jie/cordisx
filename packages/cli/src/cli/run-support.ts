@@ -1,3 +1,4 @@
+import { loadManagedSourceTrustNow } from '../launcher/managed-source-trust.js'
 import { resolveDevelopmentConfigIdentity } from '../launcher/development-source-identity.js'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -50,7 +51,9 @@ import { ProviderFleet } from '../providers/fleet.js'
 import { resolveLocalCodexProviderConfig } from '../providers/config.js'
 import type { CodexProviderConfig } from '../providers/contracts.js'
 import { CodexAgentHistoryHost } from '../launcher/agent-history.js'
+import { WorkUsageProfileHost, type WorkUsageProfileLocation } from '../launcher/work-usage-profile.js'
 import { type ConfigBridgeHandler, createConfigBridgeHandler } from '../launcher/config-rpc.js'
+import { createLauncherConfigBridgeHandler } from '../launcher/launcher-plugin-config.js'
 import {
   type HostSecretState,
   HostServiceConfigNarrowApi,
@@ -136,6 +139,8 @@ Options:
   --debug-port <port>      Override the loopback CDP port
   --online-devtools        Allow the official online DevTools frontend
   --dry-run                Resolve and print the plan without starting the host
+  --write-config           Enable plugin saves to an explicit dev --config file
+  --work-scope-guard <scope/epoch>  Require the original dev work ledger identity on admission
   dev without a path       Discover .cordisx/config.json (or cordisx.config.json) upwards
   -h, --help               Show this help`
 
@@ -295,6 +300,7 @@ export async function buildRendererComposition(
     readonly appId?: string
     readonly iconThemePreference?: HomeConfigIconThemePreference
     readonly writable?: boolean
+    readonly serviceConfigWritable?: boolean
     readonly permission?: {
       readonly profileId: string
       readonly policies: readonly CordisXPersistedPermissionPolicyRecord[]
@@ -332,7 +338,9 @@ export async function buildRendererComposition(
   const agentHistoryBridgeToken = randomBytes(32).toString('hex')
   const configBridgeToken = options.writable === true ? randomBytes(32).toString('hex') : undefined
   const ownerDocumentSecret = randomBytes(32).toString('hex')
-  const serviceConfigBridgeToken = options.writable === true ? randomBytes(32).toString('hex') : undefined
+  const serviceConfigBridgeToken = (options.serviceConfigWritable ?? options.writable) === true
+    ? randomBytes(32).toString('hex')
+    : undefined
   const permissionBridgeToken = options.permission?.persistent === true ? randomBytes(32).toString('hex') : undefined
   const iconThemePreferenceBridgeToken = options.writable === true && options.appId !== undefined
     ? randomBytes(32).toString('hex')
@@ -464,15 +472,26 @@ export function codexHome(environment: Readonly<Record<string, string>> | NodeJS
   return path.join(home, '.codex')
 }
 
+function historyLocation(
+  environment: Readonly<Record<string, string>> | NodeJS.ProcessEnv,
+  configPath: string,
+  profileName: string,
+) {
+  return {
+    codexHome: codexHome(environment),
+    cacheDir: path.join(path.dirname(configPath), 'cache', 'agent-history'),
+    profileName,
+  }
+}
 export function agentHistoryHost(
   environment: Readonly<Record<string, string>> | NodeJS.ProcessEnv,
   configPath: string,
   profileName: string,
+  workProfile?: WorkUsageProfileLocation,
 ): CodexAgentHistoryHost {
   return new CodexAgentHistoryHost({
-    codexHome: codexHome(environment),
-    cacheDir: path.join(path.dirname(configPath), 'cache', 'agent-history'),
-    profileName,
+    ...historyLocation(environment, configPath, profileName),
+    ...(workProfile === undefined ? {} : { workProfile }),
   })
 }
 
@@ -498,73 +517,7 @@ export function usesIsolatedPackageWorker(plugin: CordisXConfig['plugins'][numbe
       )))
 }
 
-export function cliProxyServiceConfigApis(input: {
-  readonly token: string
-  readonly profileId: string
-  readonly generation: string
-  readonly configPath: string
-  readonly rootDir: string
-  readonly environment: NodeJS.ProcessEnv
-  readonly fleet: ProviderFleet
-  readonly platformProviderServices?: PlatformProviderServiceReconfigureRuntime
-  readonly persistence?: HostServiceConfigPersistence
-}): readonly { readonly pluginId: string; readonly serviceId: string; readonly api: HostServiceConfigNarrowApi }[] {
-  const secretState = (reference: string | undefined): HostSecretState => {
-    if (reference === undefined || reference === '') return 'missing'
-    const environmentName = /^host-secret:env\/([A-Z_][A-Z0-9_]*)$/u.exec(reference)?.[1]
-    if (environmentName !== undefined) return input.environment[environmentName] === undefined ? 'missing' : 'ready'
-    return 'unavailable'
-  }
-  const startup = new HostServiceConfigNarrowApi({
-    contract: CLI_PROXY_PROVIDER_STARTUP_CONFIG_CONTRACT,
-    profileId: input.profileId,
-    generation: input.generation,
-    ownerToken: input.token,
-    configPath: input.configPath,
-    writable: true,
-    authorize: () => true,
-    secretState,
-    ...(input.persistence === undefined ? {} : { persistence: input.persistence }),
-  })
-  const runtime = new HostServiceConfigNarrowApi({
-    contract: CLI_PROXY_PROVIDER_RUNTIME_CONFIG_CONTRACT,
-    profileId: input.profileId,
-    generation: input.generation,
-    ownerToken: input.token,
-    configPath: input.configPath,
-    writable: true,
-    authorize: () => true,
-    secretState,
-    ...(input.persistence === undefined ? {} : { persistence: input.persistence }),
-    restartService: async candidate => {
-      const startupState = await (input.persistence?.read ?? readServiceConfigState)({
-        profileId: input.profileId,
-        pluginId: 'cli-proxy-api',
-        serviceId: CLI_PROXY_PROVIDER_STARTUP_SERVICE_ID,
-        initialConfig: CLI_PROXY_PROVIDER_STARTUP_CONFIG_INITIAL as unknown as Parameters<
-          typeof readServiceConfigState
-        >[0]['initialConfig'],
-      }, input.configPath)
-      const providers = resolveCliProxyProviderConfigs(
-        CLI_PROXY_PROVIDER_RUNTIME_CONFIG_CONTRACT.parseStored(
-          candidate,
-        ) as unknown as typeof CLI_PROXY_PROVIDER_RUNTIME_CONFIG_INITIAL,
-        parseCliProxyProviderStartupConfig(startupState.config as unknown),
-        { rootDir: input.rootDir },
-      )
-      return await (input.platformProviderServices?.reconfigure(input.fleet, providers, {
-        pluginId: 'cli-proxy-api',
-        serviceId: CLI_PROXY_PROVIDER_RUNTIME_SERVICE_ID,
-        rawConfiguration: candidate,
-      })
-        ?? input.fleet.reconfigure(providers))
-    },
-  })
-  return [
-    { pluginId: 'cli-proxy-api', serviceId: CLI_PROXY_PROVIDER_RUNTIME_SERVICE_ID, api: runtime },
-    { pluginId: 'cli-proxy-api', serviceId: CLI_PROXY_PROVIDER_STARTUP_SERVICE_ID, api: startup },
-  ]
-}
+export { cliProxyServiceConfigApis } from './provider-config-apis.js'
 
 export function recoveredActivation(plan: RollbackPlan, runtimeGeneration: string): CordisXPluginActivationRecordV1 {
   return {
@@ -776,6 +729,12 @@ export async function runDevelopment(
   homeConfigOptions: HomeConfigPathOptions,
   runtime: CordisXCliRuntime,
 ): Promise<void> {
+  if (
+    invocation.options.writeConfig === true
+    && (invocation.configPath === undefined || invocation.pluginPath !== undefined)
+  ) {
+    throw new Error('--write-config requires cordisx dev --config <path>')
+  }
   const cordisxHomeDir = rootFromConfigPath(homeConfigPath)
   const entry = invocation.pluginPath === undefined ? undefined : path.resolve(cwd, invocation.pluginPath)
   const localIdentity = entry === undefined ? undefined : await localDevelopmentPluginIdentity(entry)
@@ -790,13 +749,37 @@ export async function runDevelopment(
     )
   }
   const suppliedConfig: CordisXConfig = entry === undefined
-    ? await loadConfig(location!.configPath, { projectRoot: location!.projectRoot })
+    ? await loadConfig(location!.configPath, { projectRoot: location!.projectRoot, profileId: 'development' })
     : {
       ...localDevelopmentHostConfig(cwd),
       plugins: [{ id: localIdentity!.id, source: localIdentity!.source, entry, enabled: true, config: {} }],
     }
   const config = await resolveDevelopmentConfigIdentity(suppliedConfig)
-  if (!invocation.options.dryRun) await ensureCordisXHomeDirectory(homeConfigOptions)
+  if (!invocation.options.dryRun && invocation.options.workScopeGuard === undefined) {
+    await ensureCordisXHomeDirectory(homeConfigOptions)
+  }
+  const workProfile = {
+    homeDir: cordisxHomeDir,
+    profileId: 'development',
+    ...(invocation.options.workScopeGuard === undefined ? {} : {
+      bootstrapGuard: {
+        scopeId: invocation.options.workScopeGuard.split('/')[0]!,
+        epoch: invocation.options.workScopeGuard.split('/')[1]!,
+      },
+    }),
+  }
+  const historyPreflight = new WorkUsageProfileHost(
+    workProfile,
+    historyLocation(environment, homeConfigPath, `development:${config.rootDir}`),
+  )
+  try {
+    await historyPreflight.preflight()
+  } finally {
+    historyPreflight.dispose()
+  }
+  if (!invocation.options.dryRun && invocation.options.workScopeGuard !== undefined) {
+    await ensureCordisXHomeDirectory(homeConfigOptions)
+  }
   const dryRunCacheRoot = invocation.options.dryRun
     ? await mkdtemp(path.join(os.tmpdir(), 'cordisx-vite-dry-run-'))
     : undefined
@@ -809,6 +792,8 @@ export async function runDevelopment(
     const activeVite = vite
     const composition = await buildRendererComposition(config, stdout, {
       profileId: 'development',
+      writable: invocation.options.writeConfig === true,
+      serviceConfigWritable: false,
       permission: { profileId: 'development', policies: [], persistent: false },
       developmentBuild: (nextConfig, options = {}) => activeVite.buildBootstrap(nextConfig, options),
     })
@@ -824,6 +809,7 @@ export async function runDevelopment(
               configPath: location!.configPath,
               projectRoot: location!.projectRoot,
               configRoot: location!.configRoot,
+              configurationWrite: composition.configBridgeToken === undefined ? 'read-only' : 'enabled',
               pluginIds: config.plugins.map(plugin => plugin.id),
             }
             : { origin: 'local-dev', pluginId: localIdentity!.id, sourcePath: entry }),
@@ -836,6 +822,16 @@ export async function runDevelopment(
       ))
       return
     }
+    const configBridge = composition.configBridgeToken === undefined
+      ? undefined
+      : createLauncherConfigBridgeHandler({
+        token: composition.configBridgeToken,
+        profileId: 'development',
+        generation: composition.generation,
+        configPath: location!.configPath,
+        composition: config,
+        preserveComposition: true,
+      })
     if (invocation.options.attach) {
       stdout('[cordisx] built-in Skill deployment skipped for --attach because the Host HOME is unknown')
     } else {
@@ -869,6 +865,11 @@ export async function runDevelopment(
       stable: identities.map(identity => ({ source: identity.source, pluginId: identity.id })),
     })
     const ownerDocumentHandler = createOwnerDocumentBridgeHandler({
+      onDiagnostic: event => stdout(`[cordisx] HTTP transport ${JSON.stringify(event)}`),
+      localWalletHomeDir: cordisxHomeDir,
+      managedSourcesNow: () => loadManagedSourceTrustNow(cordisxHomeDir, 'development'),
+      managedSources: async () =>
+        (await import('../launcher/managed-source-trust.js')).loadManagedSourceTrust(cordisxHomeDir, 'development'),
       plugins: config.plugins,
       secret: composition.ownerDocumentSecret,
       profileId: 'development',
@@ -901,7 +902,7 @@ export async function runDevelopment(
     let providerFleet: ProviderFleet | undefined
     let resourcesHandedOff = false
     try {
-      historyHost = agentHistoryHost(environment, homeConfigPath, `development:${config.rootDir}`)
+      historyHost = agentHistoryHost(environment, homeConfigPath, `development:${config.rootDir}`, workProfile)
       providerFleet = composition.providerBridgeToken === undefined
         ? undefined
         : await ProviderFleet.create(providerConfigs(config, environment), {
@@ -912,6 +913,7 @@ export async function runDevelopment(
       await runInjectedHost({
         source: composition.source,
         viteDevelopment: true,
+        ...(configBridge === undefined ? {} : { configBridge }),
         hasLoopbackGraph: false,
         agentHistoryHost: historyHost,
         agentHistoryBridgeToken: composition.agentHistoryBridgeToken,
@@ -935,6 +937,7 @@ export async function runDevelopment(
         stdout,
       })
     } finally {
+      ownerDocuments.walletSpend?.dispose()
       await ownerDocuments.http.dispose()
       await ownerDocuments.agentTools?.close()
       if (!resourcesHandedOff) {

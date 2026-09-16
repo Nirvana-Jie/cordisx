@@ -353,10 +353,16 @@ export interface PluginController {
   unregisterPermissions?: () => void
   unregisterExtensionPoints?: () => void
   unregisterConnector?: () => void | Promise<void>
-  httpClient?: import('@cordisx/protocol/plugin-http/v1').HttpClientV1
+  httpClient?: import('@cordisx/protocol/plugin-http/v4').HttpClientV4
   unregisterHttp?: () => void | Promise<void>
+  unregisterWorkSettlement?: () => void | Promise<void>
+  walletSpendClient?: import('@cordisx/protocol/wallet-spend/v1').WalletSpendV1
+  unregisterWalletSpend?: () => void | Promise<void>
   unregisterDialogs?: () => void
   unregisterNotifications?: () => void
+  unregisterCurrentUser?: () => void
+  isolatedGameUi?: import('@cordisx/protocol/isolated-game-ui/v1').IsolatedGameUiV1
+  unregisterIsolatedGameUi?: () => void | Promise<void>
   restrictedContent?: import('@cordisx/protocol/restricted-content/v1').RestrictedContentV1
   unregisterRestrictedContent?: () => void | Promise<void>
   agentLoopControl?: import('@cordisx/protocol/agent-loop-control/v1').AgentLoopControlV1

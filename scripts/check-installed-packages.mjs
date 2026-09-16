@@ -31,8 +31,8 @@ for (const [name, spec] of Object.entries(expectedGitDependencies)) {
   }
 }
 const expectedProtocolSpec = sourceCordisXManifest.dependencies?.['@cordisx/protocol']
-if (expectedProtocolSpec !== '0.1.0-beta.3') {
-  throw new Error('source cordisx must consume @cordisx/protocol@0.1.0-beta.3')
+if (expectedProtocolSpec !== 'github:cordisx/cordisx-protocol#55621cd211d48783eb0f729f2925b54bd621a810') {
+  throw new Error('source cordisx must consume the merged wallet pool Protocol revision')
 }
 const protocolTarball = process.env.CORDISX_PROTOCOL_TARBALL === undefined
   ? undefined

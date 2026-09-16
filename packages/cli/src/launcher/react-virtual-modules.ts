@@ -77,6 +77,7 @@ const UI_EXPORTS = [
   'SearchField',
   'Select',
   'SelectionRail',
+  'SchemaForm',
   'Stack',
   'StatusBadge',
   'Text',

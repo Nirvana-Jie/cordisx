@@ -1,4 +1,6 @@
 import { PluginHttpAuthority } from './plugin-http-authority.js'
+import { WalletSpendAuthority } from './wallet-spend-authority.js'
+import type { PluginHttpDiagnostic } from './plugin-http-diagnostics.js'
 import { NativeAgentSessionBridge } from './native-agent-session-rpc.js'
 import { PluginAgentToolAuthority } from './plugin-agent-tools.js'
 import type { CordisXConfigPlugin } from './config.js'
@@ -237,6 +239,7 @@ export function parseOwnerDocumentBindingRequest(value: unknown): OwnerDocumentB
 
 export interface OwnerDocumentBridgeHandler {
   readonly http: PluginHttpAuthority
+  readonly walletSpend?: WalletSpendAuthority
   readonly nativeSessions?: NativeAgentSessionBridge
   readonly agentTools?: PluginAgentToolAuthority
   readonly entities?: EntityBridgeHandler
@@ -246,6 +249,9 @@ export interface OwnerDocumentBridgeHandler {
 }
 
 export function createOwnerDocumentBridgeHandler(input: {
+  readonly managedSources?: () => Promise<readonly import('./managed-source-authority.js').ManagedSourceTrust[]>
+  readonly localWalletHomeDir?: string
+  readonly managedSourcesNow?: () => readonly import('./managed-source-authority.js').ManagedSourceTrust[]
   readonly plugins?: readonly CordisXConfigPlugin[]
   readonly secret: string
   readonly profileId: string
@@ -253,6 +259,7 @@ export function createOwnerDocumentBridgeHandler(input: {
   readonly store: OwnerDocumentStore
   /** Synchronous Host principal lease check, repeated at commit. */
   readonly principalAllowed: (principal: OwnerDocumentPrincipal) => boolean
+  readonly onDiagnostic?: (event: PluginHttpDiagnostic) => void
 }): OwnerDocumentBridgeHandler {
   const agentTools = input.plugins === undefined
     ? undefined
@@ -277,6 +284,17 @@ export function createOwnerDocumentBridgeHandler(input: {
   }
   return {
     http: new PluginHttpAuthority(input),
+    walletSpend: new WalletSpendAuthority({
+      ...(input.localWalletHomeDir === undefined ? {} : { homeDir: input.localWalletHomeDir }),
+      profileId: input.profileId,
+      resolve: token => {
+        const principal = typeof token === 'string' ? verifyOwnerDocumentPrincipalToken(input.secret, token) : undefined
+        return principal?.profileId === input.profileId && principal.generation === input.generation
+            && input.principalAllowed(principal)
+          ? principal
+          : undefined
+      },
+    }),
     ...(agentTools === undefined ? {} : { agentTools, nativeSessions: new NativeAgentSessionBridge(input) }),
     issue(identity, moduleGeneration) {
       const principal = { profileId: input.profileId, generation: input.generation, moduleGeneration, identity }

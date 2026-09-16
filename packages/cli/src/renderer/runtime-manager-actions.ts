@@ -234,6 +234,7 @@ import { BrowserPlaygroundAgentSessionPersistence } from './playground-agent-ses
 import type { PlaygroundSessionScenarioCatalogV1 } from '../playground/session-scenario-catalog.js'
 import type { CordisXOwnerDocumentsV1 } from '../durable-document-contracts.js'
 import type { RuntimeClosureScope } from './runtime-closure-scope.js'
+import { developmentReloadAvailable } from './runtime-development-reload.js'
 import {
   controllerHasRuntimeModule,
   errorMessage,
@@ -443,7 +444,10 @@ export const createRuntimeManagerSnapshot = (runtimeScope: RuntimeClosureScope):
               : { canonicalSource: controller.item.package.canonicalSource }),
           },
         }),
-        ...(development === undefined ? {} : { development }),
+        ...(development === undefined ? {} : {
+          development,
+          developmentReloadAvailable: developmentReloadAvailable(runtimeScope, controller.item.id),
+        }),
         status: controller.status,
         ...(controller.error === undefined ? {} : { error: controller.error }),
         ...(controller.blockedReason === undefined ? {} : { blockedReason: controller.blockedReason }),
