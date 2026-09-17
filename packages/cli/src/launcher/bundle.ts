@@ -1,4 +1,5 @@
 import { issueNativeSessionHostToken } from './native-agent-session-rpc.js'
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { access, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -60,6 +61,11 @@ export interface RendererCompositionSource {
   readonly pluginsSource: string
   /** Files outside the ESM graph which must invalidate the composition. */
   readonly watchFiles: readonly string[]
+}
+
+export interface ProductionRendererBundleAudit {
+  readonly bytes: number
+  readonly hasInlineSourceMap: boolean
 }
 
 function bundledArtifactGeneration(plugin: CordisXConfigPlugin, moduleSource: string): string {
@@ -224,7 +230,16 @@ export async function buildRendererCompositionSource(
         globalName: '__cordisxPluginModule',
         platform: 'browser',
         target: ['chrome120'],
-        sourcemap: 'inline',
+        // This source is embedded in the production renderer payload.  An
+        // inline map makes every plugin's original sources part of the CDP
+        // injection, while Vite remains the development/debug transport.
+        sourcemap: false,
+        minifyWhitespace: true,
+        minifySyntax: true,
+        minifyIdentifiers: false,
+        // Keep notices in the one injected artifact rather than creating an
+        // unserved sidecar file for a write:false build.
+        legalComments: 'inline',
         loader: { '.svg': 'text', '.css': 'text', '.png': 'dataurl' },
         jsx: 'automatic',
         jsxImportSource: 'cordisx/react',
@@ -458,7 +473,12 @@ export async function buildRendererBundle(
   config: CordisXConfig,
   options: BuildRendererBundleOptions = {},
 ): Promise<string> {
-  const { source } = await buildRendererCompositionSource(config, options)
+  // Config roots can be outside this checkout (for example shared-profile
+  // launch tests). Keep the private Host runtime resolvable independently of
+  // the configured plugin project; plugin source is already compiled above.
+  const runtimeExtension = import.meta.url.endsWith('.ts') ? 'ts' : 'js'
+  const runtimeImport = fileURLToPath(new URL(`../renderer/runtime.${runtimeExtension}`, import.meta.url))
+  const { source } = await buildRendererCompositionSource(config, options, { runtimeImport })
 
   const result = await build({
     stdin: { contents: source, resolveDir: config.rootDir, sourcefile: 'cordisx-composition.ts' },
@@ -466,7 +486,16 @@ export async function buildRendererBundle(
     format: 'iife',
     platform: 'browser',
     target: ['chrome120'],
-    sourcemap: 'inline',
+    // Native production injection is one CDP payload.  Never put an inline
+    // sourcemap in it: large maps can prevent the Desktop renderer from
+    // reaching Page.addScriptToEvaluateOnNewDocument readiness.  Vite owns
+    // development source maps and diagnostics independently.
+    sourcemap: false,
+    minifyWhitespace: true,
+    minifySyntax: true,
+    // Native mount/recovery diagnostics deliberately retain function names.
+    minifyIdentifiers: false,
+    legalComments: 'inline',
     loader: { '.svg': 'text', '.css': 'text', '.png': 'dataurl' },
     write: false,
     logLevel: 'silent',
@@ -474,4 +503,16 @@ export async function buildRendererBundle(
   const output = result.outputFiles[0]
   if (output === undefined) throw new Error('esbuild produced no renderer bundle')
   return output.text
+}
+
+/** Return bounded evidence without retaining a large renderer payload in a test worker. */
+export async function auditProductionRendererBundle(
+  config: CordisXConfig,
+  options: BuildRendererBundleOptions = {},
+): Promise<ProductionRendererBundleAudit> {
+  const bundle = await buildRendererBundle(config, options)
+  return {
+    bytes: Buffer.byteLength(bundle),
+    hasInlineSourceMap: bundle.includes('sourceMappingURL=data:'),
+  }
 }

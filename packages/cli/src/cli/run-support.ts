@@ -2,7 +2,6 @@ import { loadManagedSourceTrustNow } from '../launcher/managed-source-trust.js'
 import { resolveDevelopmentConfigIdentity } from '../launcher/development-source-identity.js'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { randomBytes } from 'node:crypto'
 import os from 'node:os'
 import { mkdtemp, rm } from 'node:fs/promises'
 import type { ChildProcess } from 'node:child_process'
@@ -11,15 +10,14 @@ import type { ResolvedLaunchPlan } from '../adapters/contracts.js'
 import {
   ensureCordisXHomeDirectory,
   ensureHomeConfig,
-  type HomeConfigIconThemePreference,
   type HomeConfigPathOptions,
   loadHomeConfig,
   resolveHomeConfigPath,
 } from '../config/home-config.js'
-import { buildRendererBundle, type BuildRendererBundleOptions } from '../launcher/bundle.js'
+import type { buildRendererBundle } from '../launcher/bundle.js'
+export { assertProductionGraphLaunchOwnership } from '../launcher/host-generation-graph.js'
 import { CdpPluginLifecycleRuntime, watchAndInject, type WatchInjectionOptions } from '../launcher/cdp.js'
 import { localDevelopmentPluginIdentity } from '../launcher/development.js'
-import { equivalentPluginActivation } from '../launcher/plugin-activation.js'
 import { createNativeViteEntityGenerationHandler, startNativeViteServer } from '../launcher/vite-development.js'
 import {
   DirectPublisherGrantAuthority,
@@ -86,7 +84,6 @@ import {
   projectLocalChannelManager,
 } from '../launcher/channel-service.js'
 import type { CordisXPluginIdentity } from '../platform-contracts.js'
-import type { CordisXPersistedPermissionPolicyRecord } from '../permission-persistence.js'
 import type { CordisXCertifiedPermissionProjectionV1 } from '../permission-contracts.js'
 import { type PermissionPersistenceContext, PluginPermissionIdentityRegistry } from '../launcher/permission-rpc.js'
 import { LauncherMarketplaceCertifiedAuthority } from '../launcher/marketplace-certified-authority.js'
@@ -100,7 +97,13 @@ import {
   CORDISX_PLUGIN_ACTIVATION_SCHEMA_V1,
   type CordisXPluginActivationRecordV1,
 } from '../plugin-lifecycle-contracts.js'
-import type { CordisXPluginBundleManagerSnapshotV1 } from '../plugin-bundle-contracts.js'
+import { buildRendererComposition } from './renderer-composition.js'
+export {
+  assertProductionGraphBootstrapSnapshot,
+  buildRendererComposition,
+  type ChannelManagerBundleProjection,
+  type RendererComposition,
+} from './renderer-composition.js'
 import type { RollbackPlan } from '../launcher/packages/authority.js'
 import { OwnerDocumentStore } from '../launcher/owner-document-store.js'
 import { EntityDirectoryAuthority } from '../launcher/entity-directory.js'
@@ -158,6 +161,8 @@ export interface CordisXCliRuntime {
     readonly env: NodeJS.ProcessEnv
     readonly logFd: number
   }) => Readonly<{ pid: number; unref(): void }>
+  /** Repository-only seam for bounded supervisor failure-path integration tests. */
+  readonly internalSupervisorReadinessTimeoutMs?: number
   /**
    * Internal-only renderer bundle closure for repository-controlled production
    * integration tests. It has no CLI/configuration/environment input and is
@@ -166,6 +171,7 @@ export interface CordisXCliRuntime {
   readonly internalBuildRendererBundle?: typeof buildRendererBundle
   /** Repository-only proof that the production composition and authority agree. */
   readonly internalObserveOwnerDocuments?: (input: {
+    readonly bootstrapSource: string
     readonly source: string
     readonly handler: OwnerDocumentBridgeHandler
   }) => void | Promise<void>
@@ -234,237 +240,6 @@ export function providerConfigs(config: CordisXConfig, environment: NodeJS.Proce
   return local === undefined ? config.providers : [...config.providers, local]
 }
 
-export interface RendererComposition {
-  readonly source: string
-  readonly newDocumentSource?: string
-  readonly hasLoopbackGraph: boolean
-  readonly providerBridgeToken?: string
-  readonly agentHistoryBridgeToken: string
-  readonly configBridgeToken?: string
-  readonly ownerDocumentSecret: string
-  readonly serviceConfigBridgeToken?: string
-  readonly generation: string
-  readonly permissionBridgeToken?: string
-  readonly iconThemePreferenceBridgeToken?: string
-  readonly pluginLifecycleBridgeToken?: string
-  readonly managedServiceUICapabilities?: readonly {
-    readonly pluginId: string
-    readonly pluginGeneration: string
-    readonly token: string
-  }[]
-  readonly rebuild: (
-    config: CordisXConfig,
-    pluginActivation: CordisXPluginActivationRecordV1,
-    initialRegistryEpoch: number,
-    current?: Readonly<{
-      permissionPolicies: readonly CordisXPersistedPermissionPolicyRecord[]
-      pluginBundles: CordisXPluginBundleManagerSnapshotV1
-      channelManager?: ChannelManagerBundleProjection
-      managedServiceUICapabilities?: readonly {
-        readonly pluginId: string
-        readonly pluginGeneration: string
-        readonly token: string
-      }[]
-    }>,
-  ) => Promise<Readonly<{ source: string; newDocumentSource?: string }>>
-}
-
-export function assertProductionGraphLaunchOwnership(attach: boolean, hasLoopbackGraph: boolean): void {
-  if (attach && hasLoopbackGraph) {
-    throw new Error('production browser graphs require a launcher-owned native Host; --attach is unsupported')
-  }
-}
-
-export type ChannelManagerBundleProjection = NonNullable<Parameters<typeof buildRendererBundle>[1]>['channelManager']
-
-export function assertProductionGraphBootstrapSnapshot(
-  expectedActive: CordisXPluginActivationRecordV1,
-  expectedRegistryEpoch: number,
-  current: Readonly<{
-    active: CordisXPluginActivationRecordV1
-    registryEpoch: number
-  }>,
-): void {
-  if (
-    !equivalentPluginActivation(current.active, expectedActive)
-    || current.registryEpoch !== expectedRegistryEpoch
-  ) throw new Error('browser graph admission activation snapshot is stale')
-}
-
-/** Build the exact renderer composition that the launcher will inject through CDP. */
-export async function buildRendererComposition(
-  config: CordisXConfig,
-  stdout: (line: string) => void,
-  options: {
-    readonly profileId?: string
-    readonly appId?: string
-    readonly iconThemePreference?: HomeConfigIconThemePreference
-    readonly writable?: boolean
-    readonly serviceConfigWritable?: boolean
-    readonly permission?: {
-      readonly profileId: string
-      readonly policies: readonly CordisXPersistedPermissionPolicyRecord[]
-      readonly persistent: boolean
-    }
-    readonly generation?: string
-    readonly pluginLifecycle?: {
-      readonly token: string
-      readonly activation: CordisXPluginActivationRecordV1
-      readonly registryEpoch?: number
-    }
-    readonly pluginBundles?: CordisXPluginBundleManagerSnapshotV1
-    readonly certifiedPermissionChannelToken?: string
-    readonly pluginActivation?: CordisXPluginActivationRecordV1
-    readonly initialRegistryEpoch?: number
-    readonly channelManager?: ChannelManagerBundleProjection
-    /** Transient, launcher-created tokens. They are published only in the injected runtime metadata. */
-    readonly channelCredentialBridgeToken?: string
-    readonly channelActionsBridgeToken?: string
-    readonly managedServiceUICapabilities?: readonly {
-      readonly pluginId: string
-      readonly pluginGeneration: string
-      readonly token: string
-    }[]
-    readonly internalBuildRendererBundle?: typeof buildRendererBundle
-    /** Opt-in development transport; normal launches keep immutable package delivery. */
-    readonly developmentBuild?: typeof buildRendererBundle
-  } = {},
-): Promise<RendererComposition> {
-  const providerBridgeToken = (config.codex.agentLoopBackend === 'local-cli'
-      || config.providers.some(provider => provider.enabled)
-      || config.plugins.some(plugin => plugin.enabled && plugin.id === 'cli-proxy-api'))
-    ? randomBytes(32).toString('hex')
-    : undefined
-  const agentHistoryBridgeToken = randomBytes(32).toString('hex')
-  const configBridgeToken = options.writable === true ? randomBytes(32).toString('hex') : undefined
-  const ownerDocumentSecret = randomBytes(32).toString('hex')
-  const serviceConfigBridgeToken = (options.serviceConfigWritable ?? options.writable) === true
-    ? randomBytes(32).toString('hex')
-    : undefined
-  const permissionBridgeToken = options.permission?.persistent === true ? randomBytes(32).toString('hex') : undefined
-  const iconThemePreferenceBridgeToken = options.writable === true && options.appId !== undefined
-    ? randomBytes(32).toString('hex')
-    : undefined
-  const generation = options.generation ?? randomBytes(16).toString('hex')
-  const profileId = options.permission?.profileId ?? options.profileId ?? 'development'
-  const bundleOptions: BuildRendererBundleOptions = {
-    ...(providerBridgeToken === undefined ? {} : { providerBridgeToken }),
-    agentHistoryBridgeToken,
-    ...(configBridgeToken === undefined ? {} : { configBridgeToken }),
-    ownerDocumentAuthority: { secret: ownerDocumentSecret, profileId, generation },
-    ...(serviceConfigBridgeToken === undefined ? {} : { serviceConfigBridgeToken }),
-    ...(options.appId === undefined ? {} : { appId: options.appId }),
-    ...(options.iconThemePreference === undefined ? {} : { iconThemePreference: options.iconThemePreference }),
-    ...(iconThemePreferenceBridgeToken === undefined ? {} : { iconThemePreferenceBridgeToken }),
-    ...(options.channelCredentialBridgeToken === undefined
-      ? {}
-      : { channelCredentialBridgeToken: options.channelCredentialBridgeToken }),
-    ...(options.channelActionsBridgeToken === undefined
-      ? {}
-      : { channelActionsBridgeToken: options.channelActionsBridgeToken }),
-    ...(options.managedServiceUICapabilities === undefined
-      ? {}
-      : { managedServiceUICapabilities: options.managedServiceUICapabilities }),
-    ...(options.permission === undefined
-      ? (options.profileId === undefined ? {} : { profileId: options.profileId })
-      : {
-        profileId: options.permission.profileId,
-        permission: {
-          profileId: options.permission.profileId,
-          policies: options.permission.policies,
-          ...(permissionBridgeToken === undefined ? {} : { bridgeToken: permissionBridgeToken }),
-        },
-      }),
-    generation,
-    ...(options.pluginLifecycle === undefined ? {} : { pluginLifecycleBridgeToken: options.pluginLifecycle.token }),
-    ...(options.pluginBundles === undefined ? {} : { pluginBundleSnapshot: options.pluginBundles }),
-    ...((options.pluginActivation ?? options.pluginLifecycle?.activation) === undefined
-      ? {}
-      : { pluginActivation: options.pluginActivation ?? options.pluginLifecycle!.activation }),
-    ...((options.initialRegistryEpoch ?? options.pluginLifecycle?.registryEpoch) === undefined
-      ? {}
-      : { initialRegistryEpoch: options.initialRegistryEpoch ?? options.pluginLifecycle!.registryEpoch }),
-    ...(options.channelManager === undefined ? {} : { channelManager: options.channelManager }),
-  }
-  const buildBundle = options.developmentBuild ?? options.internalBuildRendererBundle ?? buildRendererBundle
-  const source = await buildBundle(config, bundleOptions)
-  const newDocumentSource = options.certifiedPermissionChannelToken === undefined
-    ? undefined
-    : await buildBundle(config, {
-      ...bundleOptions,
-      certifiedPermissionChannelToken: options.certifiedPermissionChannelToken,
-    })
-  const enabled = config.plugins.filter(plugin => plugin.enabled).map(plugin => plugin.id)
-  const hasLoopbackGraph = config.plugins.some(plugin => plugin.enabled && plugin.runtimeGraph !== undefined)
-  stdout(
-    `[cordisx] ${
-      options.developmentBuild === undefined ? 'bundle' : 'Vite entry'
-    } ready: ${source.length} bytes, plugins: ${enabled.join(', ') || '(none)'}`,
-  )
-  return {
-    source,
-    ...(newDocumentSource === undefined ? {} : { newDocumentSource }),
-    hasLoopbackGraph,
-    ...(providerBridgeToken === undefined ? {} : { providerBridgeToken }),
-    agentHistoryBridgeToken,
-    ...(configBridgeToken === undefined ? {} : { configBridgeToken }),
-    ownerDocumentSecret,
-    ...(serviceConfigBridgeToken === undefined ? {} : { serviceConfigBridgeToken }),
-    generation,
-    ...(permissionBridgeToken === undefined ? {} : { permissionBridgeToken }),
-    ...(iconThemePreferenceBridgeToken === undefined ? {} : { iconThemePreferenceBridgeToken }),
-    ...(options.pluginLifecycle === undefined ? {} : { pluginLifecycleBridgeToken: options.pluginLifecycle.token }),
-    ...(options.managedServiceUICapabilities === undefined
-      ? {}
-      : { managedServiceUICapabilities: options.managedServiceUICapabilities }),
-    rebuild: async (nextConfig, pluginActivation, initialRegistryEpoch, current) => {
-      const currentBundleOptions: BuildRendererBundleOptions = current === undefined
-        ? bundleOptions
-        : (() => {
-          const {
-            channelManager: _channelManager,
-            managedServiceUICapabilities: _managedServiceUICapabilities,
-            pluginBundleSnapshot: _pluginBundleSnapshot,
-            ...stable
-          } = bundleOptions
-          void _channelManager
-          void _managedServiceUICapabilities
-          void _pluginBundleSnapshot
-          return {
-            ...stable,
-            pluginBundleSnapshot: current.pluginBundles,
-            ...(current.channelManager === undefined ? {} : { channelManager: current.channelManager }),
-            ...(current.managedServiceUICapabilities === undefined
-              ? {}
-              : { managedServiceUICapabilities: current.managedServiceUICapabilities }),
-          }
-        })()
-      const rebuildOptions: BuildRendererBundleOptions = {
-        ...currentBundleOptions,
-        ...(
-          current === undefined || bundleOptions.permission === undefined
-            ? {}
-            : { permission: { ...bundleOptions.permission, policies: current.permissionPolicies } }
-        ),
-        ownerDocumentAuthority: { secret: ownerDocumentSecret, profileId, generation },
-        pluginActivation,
-        initialRegistryEpoch,
-      }
-      const rebuiltSource = await buildBundle(nextConfig, rebuildOptions)
-      const rebuiltNewDocumentSource = options.certifiedPermissionChannelToken === undefined
-        ? undefined
-        : await buildBundle(nextConfig, {
-          ...rebuildOptions,
-          certifiedPermissionChannelToken: options.certifiedPermissionChannelToken,
-        })
-      return {
-        source: rebuiltSource,
-        ...(rebuiltNewDocumentSource === undefined ? {} : { newDocumentSource: rebuiltNewDocumentSource }),
-      }
-    },
-  }
-}
-
 export function codexHome(environment: Readonly<Record<string, string>> | NodeJS.ProcessEnv): string {
   const explicit = environment.CODEX_HOME
   if (typeof explicit === 'string' && explicit.length > 0) return path.resolve(explicit)
@@ -497,24 +272,6 @@ export function agentHistoryHost(
 
 export function pluginIdentities(config: CordisXConfig): readonly CordisXPluginIdentity[] {
   return config.plugins.map(plugin => ({ source: plugin.source ?? pathToFileURL(plugin.entry).href, id: plugin.id }))
-}
-
-export function configuredPluginTopology(config: CordisXConfig): string {
-  return JSON.stringify(config.plugins.map(plugin => ({
-    id: plugin.id,
-    entry: plugin.entry,
-    source: plugin.source,
-    enabled: plugin.enabled,
-  })))
-}
-
-export function usesIsolatedPackageWorker(plugin: CordisXConfig['plugins'][number]): boolean {
-  const manifest = plugin.manifest
-  return manifest?.schemaVersion === 7
-    || ((manifest?.schemaVersion === 5 || manifest?.schemaVersion === 6)
-      && manifest.capabilities.some(capability => (
-        capability.name === 'ui.host-dom.read' || capability.name === 'ui.host-dom.modify'
-      )))
 }
 
 export { cliProxyServiceConfigApis } from './provider-config-apis.js'
@@ -600,6 +357,7 @@ export async function runInjectedHost(input: {
   readonly environment?: Readonly<Record<string, string>>
   readonly stdout: (line: string) => void
   readonly onReady?: () => void | Promise<void>
+  readonly onHostLaunched?: (pid: number) => void | Promise<void>
 }): Promise<void> {
   const controller = new AbortController()
   const stop = (): void => controller.abort()
@@ -673,6 +431,8 @@ export async function runInjectedHost(input: {
       input.launcher.onlineDevtools,
       input.environment,
     )
+    if (launched.pid === undefined) throw new Error('launched Host exposed no PID')
+    await input.onHostLaunched?.(launched.pid)
     await Promise.race([
       waitForHostExitAfterReadiness({
         childExit: waitForExit(launched),
