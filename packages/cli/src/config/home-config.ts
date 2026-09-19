@@ -8,6 +8,15 @@ import {
   normalizePersistedPermissionPolicyRecord,
   persistedPermissionRecordKey,
 } from '../permission-persistence.js'
+import { type HomeConfigProfileManagement, parseHomeConfigProfileManagement } from './home-config-management.js'
+
+export type {
+  HomeConfigHiddenMarketplaceEntry,
+  HomeConfigMarketplaceSource,
+  HomeConfigMarketplaceSourceLocal,
+  HomeConfigProfileManagement,
+  HomeConfigProfileManagementMigrations,
+} from './home-config-management.js'
 
 export type HomeDataMode = 'shared' | 'host-isolated'
 
@@ -86,6 +95,7 @@ export interface HomeConfigProfile {
   readonly displayName: string
   readonly dataMode: HomeDataMode
   readonly iconTheme?: HomeConfigIconThemePreference
+  readonly management?: HomeConfigProfileManagement
 }
 
 export interface HomeConfigApp {
@@ -438,7 +448,7 @@ function parseIconThemePreference(value: unknown): HomeConfigIconThemePreference
 
 function parseProfile(value: unknown, label: string): HomeConfigProfile {
   const profile = record(value, label)
-  rejectUnknownKeys(profile, ['displayName', 'dataMode', 'iconTheme'], label)
+  rejectUnknownKeys(profile, ['displayName', 'dataMode', 'iconTheme', 'management'], label)
   const displayName = nonEmptyString(profile.displayName, `${label}.displayName`)
   if (profile.dataMode !== 'shared' && profile.dataMode !== 'host-isolated' && profile.dataMode !== 'isolated') {
     throw new Error(`${label}.dataMode must be shared or host-isolated`)
@@ -446,10 +456,14 @@ function parseProfile(value: unknown, label: string): HomeConfigProfile {
   // `isolated` was the v1 spelling for an opt-in private Host root. Reading it
   // does not rewrite the file; later writes use the explicit current spelling.
   const iconTheme = parseIconThemePreference(profile.iconTheme)
+  const management = profile.management === undefined
+    ? undefined
+    : parseHomeConfigProfileManagement(profile.management, `${label}.management`)
   return {
     displayName,
     dataMode: profile.dataMode === 'isolated' ? 'host-isolated' : profile.dataMode,
     ...(iconTheme === undefined ? {} : { iconTheme }),
+    ...(management === undefined ? {} : { management }),
   }
 }
 

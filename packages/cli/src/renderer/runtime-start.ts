@@ -78,7 +78,7 @@ import { ModelProviderRegistry } from './model-providers.js'
 import { BrowserChannelCredentialBridge } from './channel-credential-binding.js'
 import { BrowserChannelActionsBridge } from './channel-actions-binding.js'
 import { BindingPermissionPolicyStore } from './permission-binding.js'
-import { BrowserPluginLifecycleBridge } from './plugin-lifecycle-binding.js'
+import { createRuntimeManagementBindings } from './runtime-management-bindings.js'
 import { PluginConsoleAspect, type PluginPrincipalToken } from './plugin-console.js'
 import {
   CORDISX_GENERATION_VISIBILITY_COORDINATOR,
@@ -213,9 +213,7 @@ export async function start(
   const channelActionsBridge = metadata.channelActionsBridgeToken === undefined
     ? undefined
     : BrowserChannelActionsBridge.connect(metadata.channelActionsBridgeToken)
-  const lifecycleBridge = metadata.pluginLifecycleBridgeToken === undefined
-    ? undefined
-    : new BrowserPluginLifecycleBridge(metadata.pluginLifecycleBridgeToken, metadata.profileId, generation)
+  const { lifecycleBridge, pluginManagementBinding } = createRuntimeManagementBindings(metadata, generation)
   const localDevelopment = new Map(plugins.flatMap(plugin =>
     plugin.development === undefined
       ? []
@@ -389,6 +387,7 @@ export async function start(
       knownRegistrations: () => knownRegistrations,
       legacyExtensionPointPolicies: () => legacyExtensionPointPolicies,
       lifecycleBridge: () => lifecycleBridge,
+      pluginManagementBinding: () => pluginManagementBinding,
       listeners: () => listeners,
       localDevelopment: () => localDevelopment,
       managerContentConfigAuthority: [

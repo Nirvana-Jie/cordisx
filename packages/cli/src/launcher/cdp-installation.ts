@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { createDocumentInstallationState, installDocumentBootstrap } from './cdp-installation-bootstrap.js'
 import * as support from './cdp-installation-support.js'
 import { installMarketplaceArtifactBinding } from './marketplace-artifact-cdp.js'
+import { installManagementCdpBinding } from './management-cdp-binding.js'
 import type { NativeSubmissionInstallation } from './native-submission-composition.js'
 
 export async function install(
@@ -26,6 +27,7 @@ export async function install(
     readonly handler: support.PluginLifecycleBridgeHandler
     readonly runtime: support.CdpPluginLifecycleRuntime
   },
+  management?: support.PluginManagementBridgeHandler,
   developmentRuntime?: support.CdpPluginLifecycleRuntime,
   publisherGrant?: support.PublisherGrantBridgeHandler,
   certifiedPermission?: Readonly<{
@@ -194,6 +196,7 @@ export async function install(
         signal: marketplaceController.signal,
       })
     }
+    const managementBinding = await installManagementCdpBinding(session, management, lifecycleRequests)
     let activeProviderRequests = 0
     if (provider !== undefined) {
       removeProviderBindingListener = session.onEvent('Runtime.bindingCalled', (params) => {
@@ -881,6 +884,14 @@ export async function install(
       ...(unregisterIconThemePreferenceBroadcast === undefined ? {} : { unregisterIconThemePreferenceBroadcast }),
       ...(lifecycleController === undefined ? {} : { lifecycleController, removeLifecycleBindingListener }),
       lifecycleBindingInstalled: lifecycle !== undefined,
+      ...(managementBinding.controller === undefined
+        ? {}
+        : {
+          managementController: managementBinding.controller,
+          removeManagementBindingListener: managementBinding.removeBindingListener,
+          unsubscribeManagement: managementBinding.unsubscribe,
+        }),
+      managementBindingInstalled: managementBinding.installed,
       unregisterLifecycleSession,
       ...(publisherGrantController === undefined
         ? {}
