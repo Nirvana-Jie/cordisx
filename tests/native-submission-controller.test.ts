@@ -671,4 +671,47 @@ describe('native submission controller', () => {
     await fixture.controller.dispose()
     expect(fixture.disposed).toEqual(['provider-b-1'])
   })
+
+  it('hands a restarted app-server only the provider table and binds the lease to the resumed thread', async () => {
+    const fixture = harness()
+    await expect(fixture.controller.prepareThreadResume({
+      threadId: 'thread-1',
+      providerId: 'provider-b',
+      model: 'model-b',
+    })).resolves.toEqual({
+      kind: 'resume',
+      configOverrides: {
+        'model_providers.provider-b': {
+          name: 'CordisX managed provider',
+          base_url: 'http://127.0.0.1:43127/v1',
+          wire_api: 'responses',
+          requires_openai_auth: false,
+          auth: {
+            command: '/usr/bin/node',
+            args: ['/private/helper.mjs', 'provider-b-1'],
+            cwd: '/private',
+            timeout_ms: 5_000,
+            refresh_interval_ms: 200,
+          },
+        },
+      },
+    })
+    expect(fixture.disposed).toEqual([])
+    await fixture.controller.releaseThread('thread-1')
+    expect(fixture.disposed).toEqual(['provider-b-1'])
+  })
+
+  it('never prepares a resume for built-in OpenAI or an unavailable provider', async () => {
+    const fixture = harness()
+    await expect(fixture.controller.prepareThreadResume({ threadId: 'thread-1', providerId: 'openai', model: 'gpt' }))
+      .resolves.toEqual({ kind: 'reject', reason: 'unknown-provider' })
+    expect(fixture.prepare).not.toHaveBeenCalled()
+    fixture.prepare.mockRejectedValueOnce(new Error('provider is not ready'))
+    await expect(fixture.controller.prepareThreadResume({
+      threadId: 'thread-1',
+      providerId: 'provider-b',
+      model: 'model-b',
+    })).resolves.toEqual({ kind: 'reject', reason: 'provider-preparation-failed' })
+    expect(fixture.disposed).toEqual([])
+  })
 })

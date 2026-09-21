@@ -24,6 +24,7 @@ const control = net.connect(socketPath)
 const controlCalls = new Map()
 const privateCalls = new Map()
 const desktopCalls = new Map()
+const resumeCalls = new Map()
 const firstTurns = new Map()
 const privatePrefix = `cordisx-private-${nonce}-`
 let sequence = 0
@@ -57,6 +58,7 @@ function stop(reason = 'transport-closed') {
   rejectAll(controlCalls)
   rejectAll(privateCalls)
   desktopCalls.clear()
+  resumeCalls.clear()
   firstTurns.clear()
   control.destroy()
   process.stdin.destroy()
@@ -172,6 +174,10 @@ async function forward(line) {
       return
     }
     if (typeof message?.id === 'string' && message.id.startsWith(privatePrefix)) throw new Error('Reserved request id')
+    if (
+      message?.method === 'thread/resume' && typeof params?.threadId === 'string'
+      && ['string', 'number'].includes(typeof message.id) && resumeCalls.size < 64
+    ) resumeCalls.set(message.id, params)
     await write(child.stdin, line)
     return
   }
@@ -227,6 +233,33 @@ async function forward(line) {
   }
 }
 
+// A restarted app-server no longer knows a launch-scoped managed provider that a persisted thread still names.
+async function recoverResume(id, params, failureLine) {
+  try {
+    const read = await nativeCall('thread/read', { threadId: params.threadId, includeTurns: false })
+    const providerId = read?.thread?.modelProvider
+    const model = read?.thread?.model
+    if (
+      typeof providerId !== 'string' || providerId === '' || providerId === 'openai'
+      || typeof model !== 'string' || model === ''
+    ) throw new Error('Native thread is not managed')
+    const prepared = await controlCall('resume', { threadId: params.threadId, providerId, model })
+    const overrides = object(prepared?.configOverrides)
+    if (prepared?.kind !== 'resume' || overrides === undefined) throw new Error('Managed resume rejected')
+    let result
+    try {
+      result = await nativeCall('thread/resume', { ...params, config: { ...object(params.config), ...overrides } })
+    } catch (error) {
+      await controlCall('resume-failed', { threadId: params.threadId }).catch(() => undefined)
+      throw error
+    }
+    await write(process.stdout, { id, result })
+  } catch {
+    // The original native failure stays authoritative whenever the Host cannot vouch for the provider.
+    await write(process.stdout, failureLine)
+  }
+}
+
 readLines(process.stdin, line => {
   inputQueue = inputQueue.then(async () => {
     await ready
@@ -248,6 +281,14 @@ readLines(child.stdout, line => {
   if (settle(privateCalls, message, false)) return
   // Late private responses must never escape into the Desktop's request table.
   if (typeof message?.id === 'string' && message.id.startsWith(privatePrefix)) return
+  const resumeParams = message.method === undefined ? resumeCalls.get(message?.id) : undefined
+  if (resumeParams !== undefined) {
+    resumeCalls.delete(message.id)
+    if (message.error !== undefined) {
+      void recoverResume(message.id, resumeParams, line).catch(stop)
+      return
+    }
+  }
   const operation = desktopCalls.get(message?.id)
   if (!operation || message.method !== undefined) {
     void write(process.stdout, line).catch(stop)

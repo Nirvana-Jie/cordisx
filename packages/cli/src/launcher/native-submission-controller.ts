@@ -134,6 +134,11 @@ export type NativeMarkedRequestConsumption =
     reason: 'unknown-token' | 'expired-token' | 'stale-operation' | 'request-mismatch' | 'scope-mismatch'
   }>
 
+/** Host-internal provider table for natively resuming a thread that a managed provider owns. */
+export type NativeThreadResumePreparation =
+  | Readonly<{ kind: 'resume'; configOverrides: Readonly<Record<string, unknown>> }>
+  | Readonly<{ kind: 'reject'; reason: 'unknown-provider' | 'provider-preparation-failed' }>
+
 export interface NativeSubmissionController {
   readonly nativeManagedModelRoutingAvailable: false
   commitSelection(scope: NativeSubmissionScope): Promise<
@@ -169,6 +174,13 @@ export interface NativeSubmissionController {
       boundThreadId?: string
     }>,
   ): Promise<void>
+  /**
+   * The app-server forgets launch-scoped provider tables when it restarts; the persisted thread still names them.
+   * Never return this value through the renderer command API.
+   */
+  prepareThreadResume(
+    input: Readonly<{ threadId: string; providerId: string; model: string }>,
+  ): Promise<NativeThreadResumePreparation>
   cancel(input: Readonly<{ scope: NativeSubmissionScope; id: string }>): Promise<boolean>
   releaseScope(scope: NativeSubmissionScope): Promise<void>
   releaseThread(threadId: string): Promise<void>
@@ -774,6 +786,33 @@ export function createNativeSubmissionController(
       operation.state = 'available'
       delete operation.request
       operation.expiresAt = now() + operationTtlMs
+    },
+    async prepareThreadResume(input) {
+      if (
+        disposed || input.providerId === 'openai' || !validText(input.providerId, 128)
+        || !validText(input.model, 512) || !validText(input.threadId, 512)
+      ) return { kind: 'reject', reason: 'unknown-provider' }
+      let credential: NativeProviderCredentialLease | undefined
+      try {
+        credential = await options.credentials.prepare(input.providerId)
+        const configOverrides = Object.freeze({
+          [`model_providers.${input.providerId}`]: providerConfig(credential),
+        })
+        if (disposed) throw new Error('native submission controller was disposed')
+        // The lease lives with the resumed thread, exactly like a binding created by a managed Send.
+        await replaceBinding({
+          threadId: input.threadId,
+          selection: { providerId: input.providerId, model: input.model },
+          serviceGeneration: credential.serviceGeneration,
+          credential,
+        })
+        return { kind: 'resume', configOverrides }
+      } catch {
+        if (credential !== undefined && bindings.get(input.threadId)?.credential !== credential) {
+          await credential.dispose()
+        }
+        return { kind: 'reject', reason: 'provider-preparation-failed' }
+      }
     },
     async cancel(input) {
       const confirmation = confirmations.get(input.id)
