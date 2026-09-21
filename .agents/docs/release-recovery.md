@@ -24,10 +24,11 @@ record; retain the normal package and clean-registry gates for release evidence.
 2. Read the failed publish log. A message that a package is still propagating is
    recoverable; an integrity, `gitHead`, repository, license, bin, engine, or
    channel-safety mismatch is not.
-3. Rerun the failed job for the same workflow run. The exact-SHA prepared
-   artifact cache is saved before publication starts, so the rerun verifies and
-   restores its `node_modules` and workspace `dist` outputs instead of repeating
-   `npm ci`, build, release metadata, and package allowlist gates.
+3. Rerun the failed job for the same workflow run. The workflow downloads the
+   exact-SHA canonical candidate from its successful `Check` run, then restores
+   the latest valid `release-state.json` saved by an earlier attempt. It reuses
+   the manifest-bound tarballs instead of repeating `npm ci`, build, release
+   tests, or package allowlist gates.
 4. Let the publisher inspect every package version first. Matching packages are
    skipped. Missing packages are all submitted in dependency order before remote
    convergence begins. A publish conflict caused by a prior submission is
@@ -137,20 +138,23 @@ compare the visible registry version with the tagged source:
 npm versions are immutable. These conditions require maintainer diagnosis and a
 new corrected version; another workflow rerun cannot repair them.
 
-## Prepared artifact boundary
+## Candidate artifact boundary
 
-The cache key includes the exact Git SHA, runner operating system, Node version,
-and npm version. Its sidecar records the tag, package set, archive size, and
-SHA-512 digest. A cache hit is verified before extraction. Cache miss or any
-identity/digest mismatch fails before extraction; there is no fallback that
-silently trusts a partial or cross-commit artifact. If the cache itself is
-damaged, delete that exact cache entry in GitHub Actions and rerun the unchanged
-tag so the normal install, test, build, metadata, and package validation path
-can create it again.
+The `Check` workflow creates package tarballs once, exercises those exact files
+in the installed-package gate, and only after every selected gate succeeds
+writes the immutable manifest and initial state. The resulting
+`release-candidate-<commit>` artifact contains only the canonical
+`.release-cache/release-manifest.json`, `.release-cache/release-state.json`, and
+`.release-cache/release-packages/` interface. Missing artifacts or any commit,
+manifest, state, package-set, size, SHA-512, or npm-integrity mismatch fail before
+extraction and publication; there is no secondary provenance schema or fallback
+rebuild path.
 
-The prepared archive sidecar protects the reusable build cache. The release
-manifest additionally protects the publishable tarballs and the durable phase
-checkpoint. Neither record substitutes for the other.
+Each release attempt uploads its latest `release-state.json` as a run-scoped
+artifact. A later attempt restores only the newest state from the same release
+run and verifies it against the immutable candidate manifest and tarballs before
+replacement. This preserves completed publication phases without allowing state
+from another commit, manifest, or workflow run to cross the recovery boundary.
 
 Pull-request CI remains risk-tiered. A package or lockfile dependency hotfix runs
 all Node test groups and package checks, plus the browser group only when the
