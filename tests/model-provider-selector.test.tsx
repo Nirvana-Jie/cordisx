@@ -482,6 +482,9 @@ describe('provider selection interaction', () => {
     await click('.cxmp-fast-toggle')
     expect(selectFastMode).toHaveBeenCalledWith(true)
     expect(document.querySelector('.cxmp-fast-trigger')?.getAttribute('aria-pressed')).toBe('true')
+    // An unregistered surface token silently renders the neutral minus placeholder instead of the bolt.
+    expect(document.querySelector('.cxmp-fast-trigger svg')?.getAttribute('data-host-icon-provider'))
+      .toBe('builtin:reicon')
     expect(document.querySelector(`${modelTrigger} .cxmp-model-separator`)).not.toBeNull()
     expect(document.querySelector(`${modelTrigger} .cxmp-effort-label`)?.textContent).toBe('High')
     expect(document.querySelector(`${modelTrigger} .cordisx-host-icon`)).toBeNull()

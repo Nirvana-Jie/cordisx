@@ -250,6 +250,18 @@ describe('Host Reicon normalized backend', () => {
     dom.window.close()
   })
 
+  it('renders the Fast mode bolt as its own glyph, outlined when off and filled when on', () => {
+    const dom = new JSDOM('<!doctype html>')
+    const off = renderHostSurfaceIconSvg(dom.window.document, 'host:bolt')
+    const on = renderHostSurfaceIconSvg(dom.window.document, 'host:bolt', { state: 'active' })
+    const neutral = renderHostIconSvg(dom.window.document, 'provider.private-key', { state: 'active' })
+    expect(off.resolution).toMatchObject({ key: 'host:bolt', provider: 'builtin:reicon', fallback: 'none' })
+    expect(on.resolution).toMatchObject({ provider: 'builtin:reicon', fallback: 'none', variant: 'filled' })
+    expect(on.svg.innerHTML).not.toBe(off.svg.innerHTML)
+    expect(on.svg.innerHTML).not.toBe(neutral.svg.innerHTML)
+    dom.window.close()
+  })
+
   it('uses a Host neutral descriptor for an unknown key', () => {
     const dom = new JSDOM('<!doctype html>')
     const unknown = renderHostIconSvg(dom.window.document, 'provider.private-key')
