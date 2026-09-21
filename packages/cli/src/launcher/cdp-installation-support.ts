@@ -29,6 +29,11 @@ import {
 } from './managed-service-ui-rpc.js'
 import { MARKETPLACE_ARTIFACT_BINDING } from './marketplace-artifact-cdp.js'
 import { safeDiagnosticMessage } from './diagnostic-redaction.js'
+import {
+  observeProductionGraphNetwork,
+  productionGraphNetworkError,
+  type ProductionGraphNetworkFailure,
+} from './production-graph-network.js'
 
 export type { ProviderFleet } from '../providers/fleet.js'
 export type { CdpTarget } from './cdp-session.js'
@@ -134,6 +139,7 @@ export {
   type ServiceConfigBridgeHandler,
 } from './service-config-rpc.js'
 export { CdpCertifiedPermissionChannel } from './certified-permission-cdp.js'
+export { observeProductionGraphNetwork, type ProductionGraphNetworkFailure } from './production-graph-network.js'
 export {
   abortable,
   CdpInstallationAbortedError,
@@ -166,7 +172,6 @@ const DEFAULT_CDP_INJECTION_TIMEOUT_MS = 60_000
 const MIN_CDP_INJECTION_TIMEOUT_MS = 5_000
 const MAX_CDP_INJECTION_TIMEOUT_MS = 600_000
 const MAX_RENDERER_DIAGNOSTIC_BYTES = 8_192
-
 export function pluginLifecycleBridgeError(error: unknown): { readonly code: string; readonly error: string } {
   const message = safeDiagnosticMessage(error)
   const candidate = error !== null && typeof error === 'object' && 'code' in error
@@ -478,6 +483,7 @@ export async function waitForProductionBootstrap(
   installId: string,
   deadline: number,
   signal?: AbortSignal,
+  network?: { latest(): ProductionGraphNetworkFailure | undefined },
 ): Promise<void> {
   let lastError: Error | undefined
   while (Date.now() < deadline) {
@@ -519,8 +525,15 @@ export async function waitForProductionBootstrap(
       const transient = lastError.message === 'cordisx:production-boot-pending'
         || /Execution context was destroyed|Cannot find context|Inspected target navigated|CDP request timed out: Runtime\.evaluate/i
           .test(lastError.message)
-      if (!transient || session.isClosed()) throw lastError
-      await delay(100, signal)
+      if (transient && !session.isClosed()) {
+        await delay(100, signal)
+        continue
+      }
+      const networkFailure = network?.latest()
+      const networkRelated = /Failed to fetch|CordisX Host (?:manifest fetch|manifest HTTP|entry import)/iu
+        .test(lastError.message)
+      if (networkFailure !== undefined && networkRelated) throw productionGraphNetworkError(networkFailure)
+      throw lastError
     }
   }
   throw new Error(`CordisX production bootstrap timed out${lastError === undefined ? '' : `: ${lastError.message}`}`)
