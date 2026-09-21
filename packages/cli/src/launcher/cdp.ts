@@ -57,19 +57,23 @@ function injectable(target: CdpTarget): boolean {
     && !target.url.includes('initialRoute=%2Favatar-overlay')
 }
 
-function targetScore(target: CdpTarget): number {
-  const label = `${target.title} ${target.url}`.toLowerCase()
-  return label.includes('codex') ? 10 : label.includes('chatgpt') ? 5 : 0
+function nativeAppTarget(target: CdpTarget): boolean {
+  return target.url === 'app://-' || target.url.startsWith('app://-/')
 }
 
-/** Select only renderer pages visibly associated with Codex/ChatGPT. */
+function targetScore(target: CdpTarget): number {
+  const label = `${target.title} ${target.url}`.toLowerCase()
+  if (label.includes('codex')) return 10
+  if (label.includes('chatgpt')) return 5
+  // The Desktop retitles its document after the open thread, so the native origin is the stable identity.
+  // A still-loading document reports an empty title or its URL; injecting into it aborts the bootstrap fetch.
+  return nativeAppTarget(target) && target.title !== '' && target.title !== target.url ? 5 : 0
+}
+
+/** Select only renderer pages of the native App origin or visibly associated with Codex/ChatGPT. */
 export function injectableTargets(targets: readonly CdpTarget[]): CdpTarget[] {
   const pages = targets.filter(injectable).sort((left, right) => targetScore(right) - targetScore(left))
   return pages.filter(target => targetScore(target) > 0)
-}
-
-function nativeAppTarget(target: CdpTarget): boolean {
-  return target.url === 'app://-' || target.url.startsWith('app://-/')
 }
 
 export interface WatchInjectionOptions {

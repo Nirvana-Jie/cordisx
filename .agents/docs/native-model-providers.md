@@ -59,6 +59,12 @@ bound, before subsequent native guards and effects; those guards remain intact.
 Model-update callbacks are resolved within their owning function, so unrelated
 minified bindings with the same spelling do not reject a compatible resource.
 
+The Desktop retitles its document after the open thread, so the launcher
+identifies the native renderer by its `app://-/` origin once the document has
+announced a title of its own; an empty or URL title means it is still loading.
+Evicting an installed renderer on a cosmetic retitle disposes the submission
+channel, rejects an in-flight first turn, and reloads the page.
+
 Each successful discovery binds interception to the observed resource SHA-256.
 A resource update between discovery and interception fails closed. The existing
 operation-token validation, awaited admission, native permission checks,
