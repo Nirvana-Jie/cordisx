@@ -13,9 +13,11 @@ describe('release scripts under native Node ESM', () => {
       `
       import assert from 'node:assert/strict'
       import { publishReleasePackages } from './scripts/release-publication.mjs'
+      import { releaseRecoveryStages } from './scripts/release-recovery-state.mjs'
       import { RELEASE_PHASES } from './scripts/release-manifest.mjs'
       assert.equal(typeof publishReleasePackages, 'function')
       assert.deepEqual(RELEASE_PHASES, ['PUBLISHED', 'VISIBLE', 'VERIFIED', 'DISTRIBUTED'])
+      assert.deepEqual(releaseRecoveryStages('VERIFIED'), ['VERIFIED', 'DISTRIBUTED'])
     `,
     ], { cwd, encoding: 'utf8', timeout: 10_000 })
     assert.ifError(result.error)

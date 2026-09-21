@@ -75,9 +75,34 @@ node scripts/release-manifest.mjs advance --manifest <manifest.json> --state <st
 node scripts/release-manifest.mjs resume --manifest <manifest.json> --state <state.json> --artifact-root <dir>
 ```
 
-The manifest/state scripts define identity and recovery semantics only. The
-release workflow and registry publisher remain responsible for creating the
-inputs and advancing phases at their existing safety boundaries.
+The manifest and state are the only release identity and lifecycle records.
+The npm publisher consumes them directly: it recreates each workspace tarball,
+requires its integrity to match the manifest, and only then publishes from the
+workspace so npm records the tagged commit as `gitHead`. It advances
+`PUBLISHED` only after every package has been accepted or read back with
+matching immutable metadata. It then advances `VISIBLE` after one concurrent
+registry readback observes matching integrity, `gitHead`, metadata, and
+provenance for the complete package set.
+
+The clean-registry verifier reopens the same manifest and state, rechecks live
+registry truth on every incomplete resume, advances `VERIFIED` only after clean
+installation and runtime/generated-project checks, and advances `DISTRIBUTED`
+only after the selected dist-tag is correct. GitHub run id, run attempt, retry
+attempt, submitted-package names, and other operational details are evidence
+inside those phase entries; they do not define another identity or lifecycle
+schema.
+
+Only the canonical `PUBLISHED`, `VISIBLE`, `VERIFIED`, and `DISTRIBUTED`
+phases are resumable. A `VISIBLE` resume never publishes again. A `PUBLISHED`
+resume may repeat `npm publish` only to cover a crash before durable phase
+advancement; an `EPUBLISHCONFLICT` remains only a cue for registry readback and
+never proves matching content. A terminal `DISTRIBUTED` state makes registry
+verification a no-op.
+
+The workflow owner must create and persist the manifest, state, and referenced
+tarballs before publication, then restore the same files for failed-job reruns.
+The publisher defaults to `.release-cache/release-manifest.json`,
+`.release-cache/release-state.json`, and `.release-cache/release-packages/`.
 
 ### Before and after this primitive
 
@@ -89,11 +114,14 @@ four phases. Reading a recovery point performs zero installs, zero builds, and
 zero registry calls; it reads two JSON files and hashes each package tarball.
 An identity failure therefore stops before any remote mutation.
 
-This primitive alone does not reduce the first release run's wall-clock time.
-The CI artifact and registry publication routes must integrate it before
-measuring the 20-30 minute narrow-hotfix and 30-45 minute Host-plus-Creator
-targets. Until then, report the existing workflow duration unchanged rather
-than attributing speculative savings to this script.
+Publication now submits all missing packages before waiting. Visibility and
+immutable verification share one exponential-backoff window: 5, 10, 20, 40,
+then at most 60 seconds per wait, with a hard 10-minute wall-clock deadline.
+In a deterministic two-package model where each package becomes visible after
+seven minutes, the configured backoff observes both at 7 minutes 15 seconds;
+the previous per-package serial flow would take about 14 minutes 30 seconds.
+Resume reuses the manifest-bound tarballs and starts from the next canonical
+phase, so it does not run `npm ci`, rebuild, or repeat completed verification.
 
 ## Stop conditions
 
