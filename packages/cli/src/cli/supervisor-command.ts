@@ -263,6 +263,8 @@ export async function runSupervisorCommand(
       const requested = await requestSupervisorStop(paths.socket, state.instanceToken)
       if (requested ? !(await waitForOwnedShutdown(state)) : true) await terminateOwnedGroups(state)
       await removeSupervisorState(paths)
+      // The stopped record must not satisfy the idempotent-start path below; restart owes a new instance.
+      state = undefined
     }
     if (invocation.action === 'stop') {
       output(runtime, { app: target.appId, profile: target.selection.profileId, status: 'stopped' }, json)

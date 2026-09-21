@@ -275,4 +275,74 @@ describe('watchAndInject session replacement', () => {
       await once(server, 'close')
     }
   })
+
+  it('keeps the installed native renderer when the Desktop retitles its document after the open thread', async () => {
+    const server = new WebSocketServer({ port: 0 })
+    await once(server, 'listening')
+    const address = server.address()
+    if (typeof address === 'string') throw new Error('fixture websocket did not bind a TCP port')
+    const connections: import('ws').WebSocket[] = []
+    const methods: string[] = []
+    server.on('connection', connection => {
+      connections.push(connection)
+      connection.on('message', data => {
+        const request = JSON.parse(String(data)) as { id: number; method: string }
+        methods.push(request.method)
+        const result = request.method === 'Page.addScriptToEvaluateOnNewDocument'
+          ? { identifier: 'bootstrap' }
+          : request.method === 'Runtime.evaluate'
+          ? { result: { value: { ok: true } } }
+          : {}
+        connection.send(JSON.stringify({ id: request.id, result }))
+      })
+    })
+    let title = 'ChatGPT'
+    let retitledPolls = 0
+    const retitledTwice = deferred()
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn(async () => {
+      // The second retitled poll proves one complete watcher pass already handled the new title.
+      if (title !== 'ChatGPT' && ++retitledPolls === 2) retitledTwice.resolve()
+      return new Response(
+        JSON.stringify([{
+          id: 'native-target',
+          title,
+          url: 'app://-/index.html',
+          type: 'page',
+          webSocketDebuggerUrl: `ws://127.0.0.1:${address.port}`,
+        }]),
+        { status: 200 },
+      )
+    }) as typeof fetch
+    const ready = deferred()
+    let readyCount = 0
+    const abort = new AbortController()
+    const watching = watchAndInject({
+      port: address.port,
+      source: 'current-live-bootstrap',
+      newDocumentSource: 'future-document-bootstrap',
+      signal: abort.signal,
+      agentHistoryHost: {} as never,
+      agentHistoryBridgeToken: 'a'.repeat(64),
+      onReady: () => {
+        readyCount++
+        ready.resolve()
+      },
+    })
+    try {
+      await ready.promise
+      const installed = methods.length
+      title = '回应问候'
+      await retitledTwice.promise
+      expect(connections).toHaveLength(1)
+      expect(readyCount).toBe(1)
+      expect(methods.slice(installed)).toEqual([])
+    } finally {
+      abort.abort()
+      await watching
+      globalThis.fetch = originalFetch
+      server.close()
+      await once(server, 'close')
+    }
+  })
 })

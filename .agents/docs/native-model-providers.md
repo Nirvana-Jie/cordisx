@@ -59,6 +59,20 @@ bound, before subsequent native guards and effects; those guards remain intact.
 Model-update callbacks are resolved within their owning function, so unrelated
 minified bindings with the same spelling do not reject a compatible resource.
 
+The Desktop retitles its document after the open thread, so the launcher
+identifies the native renderer by its `app://-/` origin once the document has
+announced a title of its own; an empty or URL title means it is still loading.
+Evicting an installed renderer on a cosmetic retitle disposes the submission
+channel, rejects an in-flight first turn, and reloads the page.
+
+Managed provider tables are launch-scoped request overrides, not persisted Codex
+configuration. A restarted app-server therefore rejects `thread/resume` for a
+thread that still names a managed provider, which also leaves the native model
+control, and with it the Host selector seat, unrendered. The intermediary reads
+the persisted provider of a failed Desktop resume and retries it once with the
+provider table the Host prepares for that thread; the lease stays bound to the
+thread. When the Host cannot vouch for the provider, the native failure stands.
+
 Each successful discovery binds interception to the observed resource SHA-256.
 A resource update between discovery and interception fails closed. The existing
 operation-token validation, awaited admission, native permission checks,

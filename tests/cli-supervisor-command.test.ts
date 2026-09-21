@@ -227,6 +227,63 @@ describe('supervisor management commands', () => {
     }
   })
 
+  it(
+    'restarts a ready instance by stopping it and spawning a replacement instead of echoing the stopped record',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'cordisx-supervisor-command-'))
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], { detached: true, stdio: 'ignore' })
+      const paths = supervisorPaths(root, 'codex', 'default')
+      try {
+        const startedAt = await processStartIdentity(child.pid!)
+        await writeSupervisorState(paths, {
+          schemaVersion: 1,
+          appId: 'codex',
+          profileId: 'default',
+          phase: 'ready',
+          pid: child.pid!,
+          processStartedAt: startedAt!,
+          instanceToken: 'e'.repeat(32),
+          createdAt: new Date().toISOString(),
+          version: cliVersion.version,
+          effectiveConfig: 'previous-launch',
+          cdpEndpoint: 'http://127.0.0.1:40000',
+        })
+        let spawned = 0
+        const output: string[] = []
+        await runSupervisorCommand(parseCordisXCli(['restart', '--json']), {
+          env: { CORDISX_HOME: root },
+          stdout: line => output.push(line),
+          internalSpawnSupervisor: () => {
+            spawned++
+            void (async () => {
+              for (;;) {
+                const state = await readSupervisorState(paths)
+                if (state !== undefined && state.instanceToken !== 'e'.repeat(32)) {
+                  await writeSupervisorState(paths, { ...state, phase: 'ready', cdpEndpoint: 'http://127.0.0.1:49998' })
+                  return
+                }
+                await new Promise(resolve => setTimeout(resolve, 5))
+              }
+            })()
+            return { pid: process.pid, unref: () => undefined }
+          },
+        })
+        expect(spawned).toBe(1)
+        expect(() => process.kill(child.pid!, 0)).toThrow()
+        expect(JSON.parse(output.at(-1)!)).toMatchObject({
+          status: 'ready',
+          pid: process.pid,
+          cdpEndpoint: 'http://127.0.0.1:49998',
+        })
+      } finally {
+        try {
+          process.kill(-child.pid!, 'SIGTERM')
+        } catch { /* already stopped */ }
+      }
+    },
+    15_000,
+  )
+
   it('resolves the owning version from source and packaged dist paths', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'cordisx-package-version-'))
     await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'cordisx', version: '9.8.7-beta.6' }))

@@ -16,6 +16,7 @@ import ArrowUpRightSquare from 'reicon/icons/ArrowUpRightSquare'
 import AlertTriangle from 'reicon/icons/AlertTriangle'
 import ArchiveBox from 'reicon/icons/ArchiveBox'
 import ArchiveUp from 'reicon/icons/ArchiveUp'
+import Bolt from 'reicon/icons/Bolt'
 import Calendar from 'reicon/icons/Calendar'
 import Chat from 'reicon/icons/Chat'
 import Chart from 'reicon/icons/Chart'
@@ -154,6 +155,7 @@ const REICON_GLYPHS = Object.freeze(
 
 export const BUILTIN_HOST_SURFACE_ICON_KEYS = [
   'host:archive',
+  'host:bolt',
   'host:chat',
   'host:dice',
   'host:file',
@@ -182,6 +184,7 @@ const Dice = createIcon('Dice', {
 const HOST_SURFACE_GLYPHS = Object.freeze(
   {
     'host:archive': ArchiveBox,
+    'host:bolt': Bolt,
     'host:chat': Chat,
     'host:dice': Dice,
     'host:file': File,

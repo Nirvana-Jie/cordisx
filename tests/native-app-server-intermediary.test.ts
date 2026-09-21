@@ -24,11 +24,24 @@ async function harness() {
   )
   const complete = vi.fn(async () => undefined)
   const authorize = vi.fn(async () => true)
+  const prepareThreadResume = vi.fn<NativeSubmissionController['prepareThreadResume']>(async input =>
+    input.threadId === 'managed-unready'
+      ? { kind: 'reject', reason: 'provider-preparation-failed' }
+      : {
+        kind: 'resume',
+        configOverrides: {
+          'model_providers.provider-b': { base_url: 'http://127.0.0.1/v1', requires_openai_auth: false },
+        },
+      }
+  )
+  const releaseThread = vi.fn(async () => undefined)
   server.bindController(
     {
       consumeMarkedRequest: consume,
       authorizeMarkedRequest: authorize,
       completeMarkedRequest: complete,
+      prepareThreadResume,
+      releaseThread,
     } as unknown as NativeSubmissionController,
   )
   const child = spawn(process.execPath, [
@@ -70,6 +83,8 @@ async function harness() {
     consume,
     complete,
     authorize,
+    prepareThreadResume,
+    releaseThread,
     read,
     send(value: unknown) {
       child.stdin.write(`${typeof value === 'string' ? value : JSON.stringify(value)}\n`)
@@ -235,6 +250,46 @@ describe('native app-server intermediary', () => {
       })
       expect(response.result.received).not.toHaveProperty('config')
       expect(response.result.received).not.toHaveProperty('modelProvider')
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('resumes a persisted managed thread after an app-server restart with the Host provider table', async () => {
+    const h = await harness()
+    try {
+      h.send({ id: 'resume-1', method: 'thread/resume', params: { threadId: 'managed-thread', config: { keep: 1 } } })
+      const resumed = JSON.parse(await h.read())
+      expect(resumed).toMatchObject({ id: 'resume-1', result: { thread: { id: 'managed-thread' } } })
+      expect(resumed.result.received).toEqual({
+        threadId: 'managed-thread',
+        config: {
+          keep: 1,
+          'model_providers.provider-b': { base_url: 'http://127.0.0.1/v1', requires_openai_auth: false },
+        },
+      })
+      expect(h.prepareThreadResume).toHaveBeenCalledWith({
+        threadId: 'managed-thread',
+        providerId: 'provider-b',
+        model: 'model-b',
+      })
+      expect(h.releaseThread).not.toHaveBeenCalled()
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('keeps the native resume failure when the Host cannot vouch for the provider', async () => {
+    const h = await harness()
+    try {
+      h.send({ id: 1, method: 'thread/resume', params: { threadId: 'managed-unready' } })
+      expect(JSON.parse(await h.read())).toEqual({
+        id: 1,
+        error: { code: -32600, message: 'failed to load configuration: Model provider `provider-b` not found' },
+      })
+      h.send({ id: 2, method: 'thread/resume', params: { threadId: 'native-thread', model: 'native' } })
+      expect(JSON.parse(await h.read())).toMatchObject({ id: 2, result: { thread: { id: 'native-thread' } } })
+      expect(h.prepareThreadResume).toHaveBeenCalledTimes(1)
     } finally {
       await h.close()
     }

@@ -12,6 +12,21 @@ reader.on('line', line => {
     process.stdout.write(`${line}\n`)
     return
   }
+  // A restarted app-server rejects a persisted managed thread until its provider table is supplied again.
+  if (
+    message.method === 'thread/resume' && String(message.params.threadId).startsWith('managed-')
+    && message.params.config?.['model_providers.provider-b'] === undefined
+  ) {
+    process.stdout.write(
+      `${
+        JSON.stringify({
+          id: message.id,
+          error: { code: -32600, message: 'failed to load configuration: Model provider `provider-b` not found' },
+        })
+      }\n`,
+    )
+    return
+  }
   if (message.method === 'thread/resume') {
     process.stdout.write(
       `${
@@ -21,6 +36,7 @@ reader.on('line', line => {
             thread: { id: message.params.threadId },
             modelProvider: message.params.modelProvider,
             model: message.params.model,
+            received: message.params,
           },
         })
       }\n`,
@@ -35,6 +51,9 @@ reader.on('line', line => {
           thread: {
             id: 'created-thread',
             ...(message.method === 'thread/read' ? { status: { type: message.params.threadId } } : {}),
+            ...(message.method === 'thread/read' && String(message.params.threadId).startsWith('managed-')
+              ? { modelProvider: 'provider-b', model: 'model-b' }
+              : {}),
           },
           received: message.params,
           method: message.method,

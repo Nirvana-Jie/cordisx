@@ -78,6 +78,23 @@ describe('injectableTargets', () => {
     ).toEqual(['codex'])
   })
 
+  it('keeps the native App renderer when the Desktop retitles its document after the open thread', () => {
+    expect(
+      injectableTargets([
+        target('web', '回应问候'),
+        target('main', '回应问候', 'app://-/index.html'),
+        target('avatar', '回应问候', 'app://-/index.html?initialRoute=%2Favatar-overlay'),
+      ]).map(item => item.id),
+    ).toEqual(['main'])
+  })
+
+  it('waits for the native document to announce its own title before admitting it', () => {
+    expect(injectableTargets([
+      target('navigating', '', 'app://-/index.html'),
+      target('loading', 'app://-/index.html', 'app://-/index.html'),
+    ])).toEqual([])
+  })
+
   it('fails closed when branding is absent instead of injecting an unrelated page', () => {
     expect(injectableTargets([
       target('first', 'Desktop'),
