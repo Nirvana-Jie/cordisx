@@ -63,10 +63,12 @@ it.skipIf(process.platform !== 'darwin')(
       ].join('\n'),
     )
     const prepareNativeConnection = vi.fn()
+    await writeFile(path.join(codexHome, 'scoped.json'), JSON.stringify({ models: [{ slug: 'deepseek-chat' }] }))
     const composition = await createNativeSubmissionComposition(
       { nativeProviderIds: [], prepareNativeConnection },
       f.executable,
       codexHome,
+      { configModelCatalogs: { deepseek: 'scoped.json' } },
     )
     try {
       expect(composition.installation.transforms).toHaveLength(2)
@@ -75,6 +77,7 @@ it.skipIf(process.platform !== 'darwin')(
       )
       expect(prepareNativeConnection).not.toHaveBeenCalled()
       const world: Record<string, any> = { crypto, setTimeout, clearTimeout }
+      const liveScope = () => ({ ...world.__cordisxNativeProviderOwner, navigationGeneration: 1 })
       let receive: (params: Record<string, unknown>) => void
       const session = {
         isClosed: () => false,
@@ -87,7 +90,12 @@ it.skipIf(process.platform !== 'darwin')(
             world[params.name] = (payload: string) => receive({ name: params.name, payload })
           }
           if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: 'script' }
-          if (method === 'Runtime.evaluate') vm.runInNewContext(params.expression, world)
+          if (method === 'Runtime.evaluate') {
+            if (params.expression === 'globalThis.__cordisxNativeSubmissionAuthority?.snapshot?.()') {
+              return { result: { value: { scope: liveScope() } } }
+            }
+            vm.runInNewContext(params.expression, world)
+          }
           return {}
         }),
       }
@@ -106,6 +114,19 @@ it.skipIf(process.platform !== 'darwin')(
           models: [{ id: 'deepseek-chat', label: 'deepseek-chat', aliases: [] }],
         }])
         expect(JSON.stringify(catalog)).not.toMatch(/base_url|env_key|api\.deepseek/u)
+        await writeFile(path.join(codexHome, 'scoped.json'), JSON.stringify({ models: [{ slug: 'shared' }] }))
+        expect((await world.__cordisxNativeProviderCommandChannel.catalogRead())[0].models)
+          .toEqual([{ id: 'shared', label: 'shared', aliases: [] }])
+        const channel = world.__cordisxNativeProviderCommandChannel
+        const scope = liveScope()
+        await channel.selectionRead({ scope, effective: { providerId: 'openai', model: 'native-default' } })
+        const action = { operationId: 'fixture-send', operationGeneration: 1, intent: 'ordinary-send' }
+        expect(await channel.submissionPrepare({ scope, action })).toMatchObject({ status: 'pass-through' })
+        await channel.selectionSelect({ scope, providerId: 'deepseek', model: 'shared' })
+        expect(await channel.submissionPrepare({ scope, action })).toMatchObject({ status: 'allow-original' })
+        await writeFile(path.join(codexHome, 'scoped.json'), JSON.stringify({ models: [{ slug: 'replacement' }] }))
+        expect(await channel.submissionPrepare({ scope, action })).toMatchObject({ status: 'reject' })
+        expect(prepareNativeConnection).not.toHaveBeenCalled()
       } finally {
         await installed.dispose()
       }
