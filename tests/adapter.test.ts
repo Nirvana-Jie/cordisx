@@ -13,6 +13,14 @@ async function settle(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 0))
 }
 
+function mockVisible(...elements: HTMLElement[]): void {
+  const rect = { x: 20, y: 30, left: 20, top: 30, right: 220, bottom: 230, width: 200, height: 200, toJSON: () => ({}) }
+  for (const element of elements) {
+    vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(rect)
+    vi.spyOn(element, 'getClientRects').mockReturnValue({ 0: rect, length: 1, item: () => rect } as DOMRectList)
+  }
+}
+
 describe('DomOutletController', () => {
   it('rolls back Playground styles and observers before publishing controls when outlet declaration fails', () => {
     const dom = new JSDOM(`<!doctype html><html><head></head><body>
@@ -283,7 +291,9 @@ describe('ReasoningIntensityProjection', () => {
   })
 
   it('adapts the current native reasoning menu into a reversible range', () => {
-    const dom = new JSDOM(`<body><div role="menu" id="menu"><div id="items">
+    const dom = new JSDOM(`<body>
+      <div data-codex-composer-root><button id="reasoning-trigger" aria-haspopup="menu" aria-expanded="true">High</button></div>
+      <div role="menu" id="menu" aria-labelledby="reasoning-trigger"><div id="items">
       <div>Reasoning intensity</div>
       <div role="menuitem">Low</div><div role="menuitem">Medium</div>
       <div role="menuitem">High<svg></svg></div><div role="menuitem">Extra high</div>
@@ -360,6 +370,46 @@ describe('ReasoningIntensityProjection', () => {
     projection.dispose()
     expect(items.every(item => item.style.display === '')).toBe(true)
     expect(menu.style.width).toBe('')
+    expect(menu.dataset.cordisxReasoningMenu).toBeUndefined()
+    dom.window.close()
+  })
+
+  it('leaves a menu opened outside the composer untouched, such as the sidebar profile menu', () => {
+    const dom = new JSDOM(`<body>
+      <aside id="app-shell-sidebar"><button id="profile-trigger" aria-haspopup="menu" aria-expanded="true">nirvanajie</button></aside>
+      <div role="menu" id="menu" aria-labelledby="profile-trigger"><div id="items">
+        <div role="menuitem">nirvanajie<span>Pro</span></div>
+        <div><div class="h-px w-full bg-border"></div></div>
+        <div role="menuitem"><svg></svg>Usage</div><div role="menuitem"><svg></svg>Show pet</div>
+        <div role="menuitem"><svg></svg>Invite friends</div><div role="menuitem"><svg></svg>Settings</div>
+        <div role="menuitem"><svg></svg>Log out</div>
+      </div></div></body>`)
+    const menu = dom.window.document.getElementById('menu') as HTMLElement
+    const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    mockVisible(menu, ...items)
+
+    expect(resolveReasoningIntensityRange(dom.window.document, 'session')).toBeUndefined()
+    expect(items.every(item => item.style.display === '')).toBe(true)
+    expect(menu.style.width).toBe('')
+    expect(menu.dataset.cordisxReasoningMenu).toBeUndefined()
+    expect(dom.window.document.querySelector('.cordisx-reasoning-native-menu-shell')).toBeNull()
+    dom.window.close()
+  })
+
+  it('does not treat a composer menu with an icon on every row as the reasoning menu', () => {
+    const dom = new JSDOM(`<body>
+      <div data-codex-composer-root><button id="model-trigger" aria-haspopup="menu" aria-expanded="true">Model</button></div>
+      <div role="menu" id="menu" aria-labelledby="model-trigger"><div id="items">
+        <div>Models</div>
+        <div role="menuitem"><svg></svg>Alpha</div><div role="menuitem"><svg></svg>Beta</div>
+        <div role="menuitem"><svg></svg>Gamma</div><div role="menuitem"><svg></svg>Delta</div>
+      </div></div></body>`)
+    const menu = dom.window.document.getElementById('menu') as HTMLElement
+    const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    mockVisible(menu, ...items)
+
+    expect(resolveReasoningIntensityRange(dom.window.document, 'session')).toBeUndefined()
+    expect(items.every(item => item.style.display === '')).toBe(true)
     expect(menu.dataset.cordisxReasoningMenu).toBeUndefined()
     dom.window.close()
   })
