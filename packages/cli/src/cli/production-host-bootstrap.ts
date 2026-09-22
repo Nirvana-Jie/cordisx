@@ -90,7 +90,9 @@ export async function prepareProductionHostBootstrap(
   let nativeSubmissionBootstrap: NativeSubmissionBootstrap | undefined
   let child: ChildProcess | undefined
   try {
-    profileLease = profile === undefined ? undefined : await acquireCodexProfileLaunchLease(profile.userDataDir)
+    profileLease = profile === undefined
+      ? undefined
+      : await acquireCodexProfileLaunchLease(profile.userDataDir, { stdout })
     await adapter.prepareLaunch(plan)
     if (
       input.prepareNativeSubmission

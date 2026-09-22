@@ -95,6 +95,8 @@ export async function createSupervisorRuntime(
     signal?: AbortSignal,
   ) => Promise<void>
   readonly markHostLaunched: (pid: number, inspectorUrl?: Promise<string>, debugPort?: number) => Promise<boolean>
+  /** Record why this generation is exiting while its published record is still current. */
+  readonly markFailed: (failure: string) => Promise<void>
   readonly close: () => Promise<void>
   readonly mainInspector: boolean
 }> {
@@ -326,6 +328,25 @@ export async function createSupervisorRuntime(
       mainAgents = undefined
       await releaseStartupOperation?.()
       releaseStartupOperation = undefined
+    },
+    async markFailed(failure): Promise<void> {
+      if (home === undefined || app === undefined || profile === undefined || fingerprint === undefined) return
+      const paths = supervisorPaths(home, app, profile)
+      const current = await readSupervisorState(paths)
+      if (
+        current === undefined
+        || current.pid !== process.pid
+        || current.effectiveConfig !== fingerprint
+        || current.instanceToken !== supervisorToken
+        || current.phase === 'failed'
+      ) return
+      const { cdpEndpoint: _cdpEndpoint, ...withoutEndpoint } = current
+      await writeSupervisorState(paths, {
+        ...withoutEndpoint,
+        phase: 'failed',
+        failure,
+        failedAt: new Date().toISOString(),
+      })
     },
     async close(): Promise<void> {
       await mainAgents?.close().catch(() => undefined)

@@ -50,6 +50,37 @@ file is abandoned, because an older detached startup may not have published
 its state yet. Do not use the flag while an older CordisX command is still
 running.
 
+## What if the launch reports a Codex profile launch lock?
+
+Each independent Chromium profile is reserved by a launch lock directory next
+to it, `<profile>.cordisx-launch-lock`, whose `owner.json` records the owning
+launcher process and its start time. A normal `stop`, `restart`, or launcher
+exit releases it.
+
+When that launcher no longer exists, for example after `kill -9`, a crash, or
+a reboot, the next launch reclaims the lock automatically and writes
+`reclaimed stale Codex profile launch lock` to `host.log`. That case needs no
+manual cleanup. `--recover-startup` is unrelated: it converts only the legacy
+`start.lock` under `~/.cordisx/run/<app>/<profile>/`.
+
+The launch still fails closed, without deleting anything, when the message
+says:
+
+- `in use by launcher process <pid>`: that launcher is alive. Stop it first
+  with `cordisx stop` for a background instance, or end the foreground
+  `cordisx run`; do not remove the lock.
+- `still used by process <pid>`: the launcher exited, but a Host tree launched
+  with that profile is still running. Stop those processes, then launch again.
+- `unrecognized launch lock` or `requires inspection`: the owner record is
+  missing, belongs to another profile path, or its process identity could not
+  be verified. Inspect the named lock directory and remove it only after
+  confirming that nothing uses the profile.
+
+The reclaim rule is defined in the
+[launcher runtime reference](launcher-runtime.md#host-profiles-cleanup-and-skill-deployment).
+When a background start fails for any of these reasons, `cordisx start` and
+`cordisx status` report that reason instead of a generic supervisor exit.
+
 ## Will CordisX require another sign-in?
 
 The default launch opens an independent Codex window while retaining the

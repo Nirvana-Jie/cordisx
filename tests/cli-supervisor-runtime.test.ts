@@ -5,6 +5,7 @@ import { createSupervisorRuntime, publishReadyAfterInspectorClose } from '../pac
 import {
   acquireSupervisorStartLock,
   processStartIdentity,
+  readSupervisorState,
   SupervisorOperationBusyError,
   supervisorPaths,
   writeSupervisorState,
@@ -150,6 +151,51 @@ describe('background supervisor publication handshake', () => {
     try {
       await writeSupervisorState(paths, { ...state, instanceToken: 'e'.repeat(64) })
       await expect(runtime.markReady(43123)).rejects.toThrow('generation is no longer current')
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  it('records its own launch failure while the published generation is still current', async () => {
+    const root = await mkdtemp(path.join('/tmp', 'cx-runtime-'))
+    const paths = supervisorPaths(root, 'codex', 'work')
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(paths.directory, { recursive: true })
+    const token = '2'.repeat(64)
+    await writeFile(paths.bootstrapToken, token, { mode: 0o600 })
+    const state = {
+      schemaVersion: 1 as const,
+      appId: 'codex',
+      profileId: 'work',
+      phase: 'starting' as const,
+      pid: process.pid,
+      processStartedAt: (await processStartIdentity(process.pid))!,
+      instanceToken: token,
+      createdAt: new Date().toISOString(),
+      version: 'test',
+      effectiveConfig: 'current',
+    }
+    await writeSupervisorState(paths, state)
+    const runtime = await createSupervisorRuntime({
+      CORDISX_SUPERVISOR_HOME: root,
+      CORDISX_SUPERVISOR_APP: 'codex',
+      CORDISX_SUPERVISOR_PROFILE: 'work',
+      CORDISX_SUPERVISOR_FINGERPRINT: 'current',
+      CORDISX_SUPERVISOR_TOKEN_FILE: paths.bootstrapToken,
+    })
+    try {
+      const failure = 'Codex profile is in use by launcher process 4242: /profiles/work/chromium'
+      await runtime.markFailed(failure)
+      const failed = await readSupervisorState(paths)
+      expect(failed).toMatchObject({ phase: 'failed', pid: process.pid, instanceToken: token, failure })
+      expect(failed?.cdpEndpoint).toBeUndefined()
+      expect(typeof failed?.failedAt).toBe('string')
+      // The first recorded reason wins; a later generation is never rewritten.
+      await runtime.markFailed('later reason')
+      expect((await readSupervisorState(paths))?.failure).toBe(failure)
+      await writeSupervisorState(paths, { ...state, instanceToken: 'e'.repeat(64) })
+      await runtime.markFailed('stale generation reason')
+      expect(await readSupervisorState(paths)).toMatchObject({ phase: 'starting', instanceToken: 'e'.repeat(64) })
     } finally {
       await runtime.close()
     }

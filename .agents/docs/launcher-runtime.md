@@ -136,6 +136,21 @@ on shutdown, removes CDP injections then terminates only that group plus
 helpers fenced by its exact CordisX-managed user-data directory; an explicitly
 user-supplied `--profile-dir` never grants a broad helper-cleanup target.
 
+Each independent `user-data-dir` is reserved by an adjacent
+`<profile>.cordisx-launch-lock` directory whose `owner.json` records the
+launcher PID, its process start time, a random token, and the canonical profile
+path; release verifies the token before removing the directory. A lock whose
+recorded launcher identity is gone (the PID is absent or has a different start
+time) is reclaimed automatically only after the process table shows no live
+command line using that `--user-data-dir`. The reclaim renames the stale
+directory aside atomically and re-verifies its token before deletion, so
+concurrent launchers cannot delete each other's replacement lock. A live owner,
+a profile still used by a surviving Host tree, an unrecognized owner record, or
+an unverifiable process identity fails closed and names the lock to inspect.
+This lease is distinct from the app/profile startup lock described in
+[distribution-and-cli.md](distribution-and-cli.md); `--recover-startup` never
+touches it.
+
 Immediately before a named Host launch or a direct-entry development launch,
 the launcher deploys the versioned `cordisx-plugin-development` Skill shipped
 in its npm distribution. A normal

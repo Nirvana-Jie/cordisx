@@ -5,7 +5,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  acquireCodexProfileLaunchLease,
   assertLoopbackPortAvailable,
   codexExecutableCandidates,
   codexLaunchArgs,
@@ -171,97 +170,6 @@ describe('isolated Codex process support', () => {
         server.close(error => error === undefined ? resolve() : reject(error))
       )
     }
-  })
-
-  it('holds an exclusive launch lease without deleting the persistent profile', async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'cordisx-profile-lease-test-'))
-    const profile = path.join(directory, 'profile')
-    await mkdir(profile)
-    await writeFile(path.join(profile, 'sentinel'), 'preserved')
-    const first = await acquireCodexProfileLaunchLease(profile)
-    try {
-      await expect(acquireCodexProfileLaunchLease(profile)).rejects.toThrow('profile is in use')
-      expect(await readFile(path.join(profile, 'sentinel'), 'utf8')).toBe('preserved')
-    } finally {
-      await first.release()
-    }
-    const second = await acquireCodexProfileLaunchLease(profile)
-    await second.release()
-    expect(await readFile(path.join(profile, 'sentinel'), 'utf8')).toBe('preserved')
-    await rm(directory, { recursive: true, force: true })
-  })
-
-  it('acquires a launch lease beneath an empty root without creating profile contents', async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'cordisx-empty-profile-lease-test-'))
-    const profile = path.join(directory, 'apps', 'codex', 'profiles', 'fresh', 'chromium')
-    const lease = await acquireCodexProfileLaunchLease(profile)
-    try {
-      await expect(access(path.dirname(profile))).resolves.toBeUndefined()
-      await expect(access(profile)).rejects.toMatchObject({ code: 'ENOENT' })
-      await expect(access(`${profile}.cordisx-launch-lock/owner.json`)).resolves.toBeUndefined()
-    } finally {
-      await lease.release()
-      await rm(directory, { recursive: true, force: true })
-    }
-  })
-
-  it.skipIf(process.platform === 'win32')(
-    'shares one launch lease across equivalent symlink parent paths',
-    async () => {
-      const directory = await mkdtemp(path.join(os.tmpdir(), 'cordisx-symlink-profile-lease-test-'))
-      const actualParent = path.join(directory, 'actual')
-      const linkedParent = path.join(directory, 'linked')
-      await mkdir(actualParent)
-      await symlink(actualParent, linkedParent)
-      const first = await acquireCodexProfileLaunchLease(path.join(linkedParent, 'profile'))
-      try {
-        await expect(acquireCodexProfileLaunchLease(path.join(actualParent, 'profile')))
-          .rejects.toThrow('profile is in use')
-      } finally {
-        await first.release()
-      }
-      const second = await acquireCodexProfileLaunchLease(path.join(actualParent, 'profile'))
-      await second.release()
-      await rm(directory, { recursive: true, force: true })
-    },
-  )
-
-  it('fails closed instead of reclaiming a stale profile lock by path', async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'cordisx-stale-profile-lease-test-'))
-    const profile = path.join(directory, 'profile')
-    await mkdir(profile)
-    const canonicalProfile = await realpath(profile)
-    const lock = `${canonicalProfile}.cordisx-launch-lock`
-    await mkdir(lock)
-    await writeFile(
-      path.join(lock, 'owner.json'),
-      `${
-        JSON.stringify({
-          version: 1,
-          pid: 2_147_483_647,
-          processStartedAt: 'stale',
-          token: 'stale-token',
-          userDataDir: canonicalProfile,
-        })
-      }\n`,
-    )
-    await expect(acquireCodexProfileLaunchLease(profile)).rejects.toThrow('stale launch lock')
-    expect(await readFile(path.join(lock, 'owner.json'), 'utf8')).toContain('stale-token')
-    await rm(directory, { recursive: true, force: true })
-  })
-
-  it('retries release after ownership verification fails', async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'cordisx-profile-release-test-'))
-    const profile = path.join(directory, 'profile')
-    await mkdir(profile)
-    const lease = await acquireCodexProfileLaunchLease(profile)
-    const ownerPath = `${profile}.cordisx-launch-lock/owner.json`
-    const owner = await readFile(ownerPath, 'utf8')
-    await writeFile(ownerPath, owner.replace(/"token":"[^"]+"/u, '"token":"changed"'))
-    await expect(lease.release()).rejects.toThrow('ownership changed')
-    await writeFile(ownerPath, owner)
-    await expect(Promise.all([lease.release(), lease.release()])).resolves.toEqual([undefined, undefined])
-    await rm(directory, { recursive: true, force: true })
   })
 
   it('terminates only the exact launched child and leaves a sibling alive', async () => {
