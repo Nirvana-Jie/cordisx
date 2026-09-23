@@ -296,7 +296,7 @@ describe('ReasoningIntensityProjection', () => {
       <div role="menu" id="menu" aria-labelledby="reasoning-trigger"><div id="items">
       <div>Reasoning intensity</div>
       <div role="menuitem">Low</div><div role="menuitem">Medium</div>
-      <div role="menuitem">High<svg></svg></div><div role="menuitem">Extra high</div>
+      <div role="menuitem" data-reasoning-selected="true">High<svg></svg></div><div role="menuitem">Extra high</div>
       <div role="menuitem">Extra high<span>Faster usage</span></div>
     </div></div></body>`)
     const menu = dom.window.document.getElementById('menu') as HTMLElement
@@ -371,6 +371,58 @@ describe('ReasoningIntensityProjection', () => {
     expect(items.every(item => item.style.display === '')).toBe(true)
     expect(menu.style.width).toBe('')
     expect(menu.dataset.cordisxReasoningMenu).toBeUndefined()
+    dom.window.close()
+  })
+
+  it('adapts the reasoning submenu portaled from the model picker and leaves the model rows alone', () => {
+    const dom = new JSDOM(`<body>
+      <div data-codex-composer-root><button id="model-trigger" aria-haspopup="menu" aria-expanded="true">Model</button></div>
+      <div role="menu" id="model-menu" aria-labelledby="model-trigger"><div id="model-items">
+        <div role="menuitem" data-model-selected="true">Alpha<svg></svg></div><div role="menuitem">Beta</div>
+        <div role="menuitem">Gamma</div><div role="menuitem">Delta</div>
+        <div role="menuitem" id="reasoning-sub-trigger" aria-haspopup="menu" aria-expanded="true">Reasoning</div>
+      </div></div>
+      <div role="menu" id="menu" aria-labelledby="reasoning-sub-trigger"><div id="items">
+        <div role="menuitem">Low</div><div role="menuitem">Medium</div>
+        <div role="menuitem" data-reasoning-selected="true">High<svg></svg></div><div role="menuitem">Extra high</div>
+      </div></div></body>`)
+    const modelMenu = dom.window.document.getElementById('model-menu') as HTMLElement
+    const modelItems = [...modelMenu.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    const menu = dom.window.document.getElementById('menu') as HTMLElement
+    const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    mockVisible(modelMenu, ...modelItems, menu, ...items)
+
+    const range = resolveReasoningIntensityRange(dom.window.document, 'session')!
+    expect(range).toMatchObject({ min: '0', max: '3', step: '1', value: '2' })
+    expect(menu.dataset.cordisxReasoningMenu).toBe('true')
+    expect(items.every(item => item.style.display === 'none')).toBe(true)
+    expect(modelItems.every(item => item.style.display === '')).toBe(true)
+    expect(modelMenu.dataset.cordisxReasoningMenu).toBeUndefined()
+    dom.window.close()
+  })
+
+  it('leaves a single-checkmark model submenu untouched', () => {
+    const dom = new JSDOM(`<body>
+      <div data-codex-composer-root><button id="picker-trigger" aria-haspopup="menu" aria-expanded="true">Model</button></div>
+      <div role="menu" id="picker" aria-labelledby="picker-trigger"><div>
+        <div role="menuitem" id="models-sub-trigger" aria-haspopup="menu" aria-expanded="true">Models</div>
+      </div></div>
+      <div role="menu" id="menu" aria-labelledby="models-sub-trigger"><div id="items">
+        <div>Model</div>
+        <div role="menuitem">Alpha</div><div role="menuitem">Beta</div>
+        <div role="menuitem" data-model-selected="true">Gamma<svg></svg></div><div role="menuitem">Delta</div>
+      </div></div></body>`)
+    const menu = dom.window.document.getElementById('menu') as HTMLElement
+    const items = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    mockVisible(menu, ...items)
+    const selected = vi.spyOn(items[2]!, 'click')
+
+    expect(resolveReasoningIntensityRange(dom.window.document, 'session')).toBeUndefined()
+    expect(items.every(item => item.style.display === '')).toBe(true)
+    expect(menu.style.width).toBe('')
+    expect(menu.dataset.cordisxReasoningMenu).toBeUndefined()
+    expect(dom.window.document.querySelector('.cordisx-reasoning-native-menu-shell')).toBeNull()
+    expect(selected).not.toHaveBeenCalled()
     dom.window.close()
   })
 

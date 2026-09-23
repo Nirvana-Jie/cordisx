@@ -8,26 +8,6 @@ import type { ControlledSurfacePointBinding } from '../controlled-surfaces.js'
 import { ControlledSurfaceCoordinator } from '../controlled-surfaces.js'
 
 const reasoningMenuCleanup = new WeakMap<HTMLInputElement, () => void>()
-const COMPOSER_ROOT_SELECTOR = '[data-codex-composer-root]'
-
-/**
- * Follow `aria-labelledby` ownership from a menu (or submenu) back to the
- * control that opened it. Only a menu opened from the composer can be the
- * native reasoning menu; the sidebar profile menu shares its shape but is not.
- */
-function menuOpenedFromComposer(document: Document, menu: HTMLElement): boolean {
-  let current: HTMLElement | null = menu
-  for (let depth = 0; depth < 4 && current !== null; depth += 1) {
-    const labelledBy: string | null = current.getAttribute('aria-labelledby')
-    const trigger: HTMLElement | null = labelledBy === null || labelledBy === ''
-      ? null
-      : document.getElementById(labelledBy)
-    if (trigger === null) return false
-    if (trigger.closest(COMPOSER_ROOT_SELECTOR) !== null) return true
-    current = trigger.closest<HTMLElement>('[role="menu"]')
-  }
-  return false
-}
 
 function reasoningPowerSliderRange(document: Document): HTMLInputElement | undefined {
   const nativeSliders = [
@@ -118,14 +98,14 @@ function reasoningMenuRange(document: Document): HTMLInputElement | undefined {
         .filter(item => item.closest('[role="menu"]') === menu)
         .filter(strictlyVisible)
       if (items.length < 4 || items.length > 8) return []
-      if (!menuOpenedFromComposer(document, menu)) return []
       const parent = items[0]?.parentElement
       if (parent === null || parent === undefined || items.some(item => item.parentElement !== parent)) return []
-      // The selected level carries the only svg (its checkmark); a row of icons is another menu.
-      const marked = items.filter(item => item.querySelector('svg') !== null)
-      if (marked.length !== 1) return []
-      const selectedIndex = items.indexOf(marked[0]!)
-      return [{ menu, items, parent, selectedIndex }]
+      // Only the native reasoning menu marks its selected level this way. Model
+      // rows use `data-model-selected` and other menus carry no marker, so a
+      // checkmark icon or composer ancestry alone never qualifies a menu.
+      const selected = items.filter(item => item.getAttribute('data-reasoning-selected') === 'true')
+      if (selected.length !== 1) return []
+      return [{ menu, items, parent, selectedIndex: items.indexOf(selected[0]!) }]
     })
   if (menus.length !== 1) return undefined
   const candidate = menus[0]
