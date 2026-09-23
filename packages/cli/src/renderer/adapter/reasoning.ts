@@ -100,9 +100,12 @@ function reasoningMenuRange(document: Document): HTMLInputElement | undefined {
       if (items.length < 4 || items.length > 8) return []
       const parent = items[0]?.parentElement
       if (parent === null || parent === undefined || items.some(item => item.parentElement !== parent)) return []
-      const selectedIndex = items.findIndex(item => item.querySelector('svg') !== null)
-      if (selectedIndex < 0) return []
-      return [{ menu, items, parent, selectedIndex }]
+      // Only the native reasoning menu marks its selected level this way. Model
+      // rows use `data-model-selected` and other menus carry no marker, so a
+      // checkmark icon or composer ancestry alone never qualifies a menu.
+      const selected = items.filter(item => item.getAttribute('data-reasoning-selected') === 'true')
+      if (selected.length !== 1) return []
+      return [{ menu, items, parent, selectedIndex: items.indexOf(selected[0]!) }]
     })
   if (menus.length !== 1) return undefined
   const candidate = menus[0]
