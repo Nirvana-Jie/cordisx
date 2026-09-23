@@ -76,7 +76,12 @@ supervisor does not begin Host initialization until its matching state record
 is published. Upgrades from the earlier existence-only `start.lock` require an
 explicit `--recover-startup` operation after all older CordisX commands for the
 selected app/profile have exited; an empty or old lock file is not treated as
-proof that recovery is safe.
+proof that recovery is safe. A detached supervisor that fails before readiness
+publishes its own failure reason, which `start` reports and `status` retains.
+The independent Chromium profile is reserved separately by a launcher-owned
+launch lock with its own automatic reclaim rule, described in the
+[launcher runtime reference](launcher-runtime.md#host-profiles-cleanup-and-skill-deployment);
+`--recover-startup` never touches that lock.
 
 `app` is an adapter id, not a hard-coded union owned by the CLI. `codex` is the
 first implementation. `claude-code` and later hosts use the same grammar only

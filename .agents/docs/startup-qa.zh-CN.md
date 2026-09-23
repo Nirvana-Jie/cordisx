@@ -42,6 +42,31 @@ npx cordisx@beta start codex default --recover-startup
 不会因为锁文件为空或创建时间较早就认定它已被遗弃，因为旧版 detached 启动进程
 可能尚未写入状态。旧版 CordisX 命令仍在运行时不要使用该选项。
 
+## 启动时提示 Codex profile 启动锁（launch lock）怎么办？
+
+每个独立 Chromium profile 旁都有一个启动锁目录 `<profile>.cordisx-launch-lock`，
+其中的 `owner.json` 记录持有它的启动器进程及其启动时间。正常的 `stop`、
+`restart` 或启动器退出都会释放它。
+
+如果该启动器已不存在（例如被 `kill -9`、崩溃或重启机器），下次启动会自动
+回收这个锁，并在 `host.log` 中写入 `reclaimed stale Codex profile launch lock`；
+这种情况不需要手工清理。`--recover-startup` 与它无关：该选项只转换
+`~/.cordisx/run/<app>/<profile>/` 下的旧版 `start.lock`。
+
+出现以下提示时，启动仍会拒绝并保持现场不动、不删除任何内容：
+
+- `in use by launcher process <pid>`：该启动器仍在运行。先停止它——后台实例
+  用 `cordisx stop`，前台 `cordisx run` 直接结束——不要删除锁。
+- `still used by process <pid>`：启动器已退出，但用该 profile 启动的宿主进程树
+  仍在运行。先停止这些进程，再重新启动。
+- `unrecognized launch lock` 或 `requires inspection`：owner 记录缺失、指向其他
+  profile 路径，或进程身份无法核实。请检查提示中的锁目录，确认没有任何进程在
+  使用该 profile 后再删除。
+
+回收规则见[启动器运行时参考](launcher-runtime.md#host-profiles-cleanup-and-skill-deployment)。
+后台启动因上述任一原因失败时，`cordisx start` 和 `cordisx status` 会直接报告
+该原因，而不是笼统的 supervisor 退出信息。
+
 ## 启动后需要重新登录吗？
 
 默认启动会打开独立的 Codex 窗口，同时沿用已有账号、会话、项目和模型配置。

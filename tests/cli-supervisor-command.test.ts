@@ -283,6 +283,40 @@ describe('supervisor management commands', () => {
     }
   }, 15_000)
 
+  it('reports the failure published by the detached supervisor instead of a generic exit', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cordisx-supervisor-command-'))
+    const paths = supervisorPaths(root, 'codex', 'default')
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], { detached: true, stdio: 'ignore' })
+    const failure = 'Codex profile launch lock owner 4242 has exited, but the profile is still used by process 4343'
+    const output: string[] = []
+    try {
+      const start = runSupervisorCommand(parseCordisXCli(['start', '--json']), {
+        env: { CORDISX_HOME: root },
+        stdout: line => output.push(line),
+        internalSpawnSupervisor: () => child,
+      })
+      let state
+      for (;;) {
+        state = await readSupervisorState(paths)
+        if (state !== undefined) break
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+      // The supervisor child publishes why it is exiting, as markFailed does.
+      await writeSupervisorState(paths, { ...state, phase: 'failed', failure, failedAt: new Date().toISOString() })
+      await expect(start).rejects.toThrow(failure)
+      expect(output).toEqual([])
+      await runSupervisorCommand(parseCordisXCli(['status', '--json']), {
+        env: { CORDISX_HOME: root },
+        stdout: line => output.push(line),
+      })
+      expect(JSON.parse(output.pop()!)).toMatchObject({ status: 'failed', pid: null, failure })
+    } finally {
+      try {
+        process.kill(-child.pid!, 'SIGKILL')
+      } catch { /* already stopped */ }
+    }
+  }, 15_000)
+
   it('reports startup-operation contention instead of renderer readiness timeout', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'cordisx-supervisor-command-'))
     const release = await acquireSupervisorStartLock(supervisorPaths(root, 'codex', 'default'))

@@ -75,12 +75,6 @@ import { PluginActivationStore } from '../launcher/plugin-activation.js'
 import { loadActivatedPluginComposition, loadPluginComposition } from '../launcher/plugin-composition.js'
 import { PluginLifecycleCoordinator } from '../launcher/plugin-lifecycle.js'
 import type { PluginLifecycleBridgeHandler } from '../launcher/plugin-lifecycle-rpc.js'
-import { openPluginManagementService } from '../management/service.js'
-import {
-  type PluginManagementBridgeHandler,
-  type PluginManagementRpcServer,
-  startPluginManagementRpcServer,
-} from '../launcher/management-rpc.js'
 import {
   CORDISX_PLUGIN_ACTIVATION_SCHEMA_V1,
   type CordisXPluginActivationRecordV1,
@@ -144,66 +138,17 @@ import { prepareCliCommand } from './run-command-dispatch.js'
 import { shouldEnableNativeSubmission } from './native-submission-launch-policy.js'
 import { createRendererChannelComposition } from './renderer-channel-composition.js'
 import { createSupervisorRuntime } from './supervisor-runtime.js'
-import { processStartIdentity } from './supervisor-state.js'
 import { prepareProductionHostBootstrap, type ProductionHostBootstrap } from './production-host-bootstrap.js'
+import {
+  openProductionPluginManagementComposition,
+  type ProductionPluginManagementComposition,
+} from './production-plugin-management.js'
 
-export interface ProductionPluginManagementComposition {
-  readonly handler: PluginManagementBridgeHandler
-  close(): Promise<void>
-}
-export async function openProductionPluginManagementComposition(input: {
-  readonly configPath: string
-  readonly homeDir: string
-  readonly appId: string
-  readonly profileId: string
-  readonly runtimeGeneration: string
-  readonly token: string
-  readonly coordinator: PluginLifecycleCoordinator
-  readonly processStartedAt?: string
-}): Promise<ProductionPluginManagementComposition> {
-  const service = await openPluginManagementService({
-    configPath: input.configPath,
-    homeDir: input.homeDir,
-    appId: input.appId,
-    profileId: input.profileId,
-    lifecycle: { coordinator: input.coordinator, runtimeGeneration: input.runtimeGeneration },
-  })
-  let server: PluginManagementRpcServer
-  try {
-    const processStartedAt = input.processStartedAt ?? await processStartIdentity(process.pid)
-    if (processStartedAt === undefined) throw new Error('cannot identify the CordisX management owner process')
-    server = await startPluginManagementRpcServer({
-      homeDir: input.homeDir,
-      appId: input.appId,
-      profileId: input.profileId,
-      configPath: input.configPath,
-      generation: input.runtimeGeneration,
-      processStartedAt,
-      service,
-    })
-  } catch (error) {
-    service.close()
-    throw error
-  }
-  let closed = false
-  return {
-    handler: {
-      token: input.token,
-      profileId: input.profileId,
-      generation: input.runtimeGeneration,
-      service,
-    },
-    async close(): Promise<void> {
-      if (closed) return
-      closed = true
-      try {
-        await server.close()
-      } finally {
-        service.close()
-      }
-    },
-  }
-}
+export {
+  openProductionPluginManagementComposition,
+  type ProductionPluginManagementComposition,
+} from './production-plugin-management.js'
+
 export async function runCordisXCli(argv: readonly string[], runtime: CordisXCliRuntime = {}): Promise<void> {
   const prepared = await prepareCliCommand(argv, runtime)
   if (prepared === undefined) return
@@ -854,7 +799,7 @@ export async function runCordisXCli(argv: readonly string[], runtime: CordisXCli
     const resolvedDebugPort = debugPort
     await nativeSubmissionCompletion
     if (profile !== undefined && profileLease === undefined && runHost === runInjectedHost) {
-      profileLease = await acquireCodexProfileLaunchLease(profile.userDataDir)
+      profileLease = await acquireCodexProfileLaunchLease(profile.userDataDir, { stdout })
     }
     try {
       if (
@@ -982,6 +927,9 @@ export async function runCordisXCli(argv: readonly string[], runtime: CordisXCli
       await channelService?.dispose()
       await closeProviderFleet()
     }
+  } catch (error) {
+    await supervisorRuntime.markFailed(error instanceof Error ? error.message : String(error)).catch(() => undefined)
+    throw error
   } finally {
     if (prelaunchedHost !== undefined && !prelaunchedHostHandedOff) {
       await terminateIsolatedCodex(prelaunchedHost.child, profile).catch(() => undefined)

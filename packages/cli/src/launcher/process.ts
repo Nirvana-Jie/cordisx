@@ -1,21 +1,23 @@
 import { constants } from 'node:fs'
-import { access, chmod, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { type ChildProcess, execFile, execFileSync, spawn } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
+import { liveProcessStartedAt, type ProcessIdentity, processTable } from './process-identity.js'
+
+export {
+  acquireCodexProfileLaunchLease,
+  type CodexProfileLaunchLease,
+  type CodexProfileLaunchLeaseOptions,
+} from './profile-launch-lease.js'
 
 export interface IsolatedCodexProfile {
   readonly userDataDir: string
   /** True only for a directory CordisX allocated and can safely sweep on exit. */
   readonly cleanupOwned: boolean
-}
-
-export interface CodexProfileLaunchLease {
-  readonly userDataDir: string
-  release(): Promise<void>
 }
 
 export interface IsolatedCodexProfileOptions {
@@ -27,148 +29,8 @@ export interface IsolatedCodexProfileOptions {
 
 export const ONLINE_DEVTOOLS_ORIGIN = 'https://chrome-devtools-frontend.appspot.com'
 
-interface ProfileLeaseRecord {
-  readonly version: 1
-  readonly pid: number
-  readonly processStartedAt: string
-  readonly token: string
-  readonly userDataDir: string
-}
-
-interface ProcessIdentity {
-  readonly pid: number
-  readonly parentPid: number
-  readonly startedAt: string
-}
-
 const launchedProcessOwnership = new WeakMap<ChildProcess, ProcessOwnershipTracker>()
 const pendingHiddenOwnership = new WeakMap<ChildProcess, ProcessOwnershipTracker>()
-
-function processTable(): readonly ProcessIdentity[] {
-  if (process.platform === 'win32') return []
-  return execFileSync('ps', ['-axo', 'pid=,ppid=,lstart='], { encoding: 'utf8' })
-    .split('\n')
-    .flatMap(line => {
-      const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(line)
-      if (match === null) return []
-      const pid = Number(match[1])
-      const parentPid = Number(match[2])
-      const startedAt = match[3] ?? ''
-      return Number.isInteger(pid) && pid > 0 && Number.isInteger(parentPid) && parentPid >= 0
-        ? [{ pid, parentPid, startedAt }]
-        : []
-    })
-}
-
-function liveProcessStartedAt(pid: number): string | undefined {
-  if (process.platform === 'win32') {
-    try {
-      process.kill(pid, 0)
-      return 'live'
-    } catch {
-      return undefined
-    }
-  }
-  return processTable().find(item => item.pid === pid)?.startedAt
-}
-
-async function canonicalProfileLeaseTarget(userDataDir: string): Promise<string> {
-  const resolvedProfile = path.resolve(userDataDir)
-  try {
-    return await realpath(resolvedProfile)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-  }
-  const parent = path.dirname(resolvedProfile)
-  await mkdir(parent, { recursive: true, mode: 0o700 })
-  return path.join(await realpath(parent), path.basename(resolvedProfile))
-}
-
-function profileLeasePath(userDataDir: string): string {
-  return `${userDataDir}.cordisx-launch-lock`
-}
-
-function parseProfileLeaseRecord(source: string): ProfileLeaseRecord | undefined {
-  try {
-    const value = JSON.parse(source) as Partial<ProfileLeaseRecord>
-    if (
-      value.version !== 1 || !Number.isInteger(value.pid) || value.pid! <= 0
-      || typeof value.processStartedAt !== 'string' || value.processStartedAt === ''
-      || typeof value.token !== 'string' || value.token === ''
-      || typeof value.userDataDir !== 'string' || !path.isAbsolute(value.userDataDir)
-    ) return undefined
-    return value as ProfileLeaseRecord
-  } catch {
-    return undefined
-  }
-}
-
-/** Exclusively reserve one persistent Chromium profile for this launcher process. */
-export async function acquireCodexProfileLaunchLease(userDataDir: string): Promise<CodexProfileLaunchLease> {
-  const resolvedProfile = await canonicalProfileLeaseTarget(userDataDir)
-  const lockPath = profileLeasePath(resolvedProfile)
-  const processStartedAt = liveProcessStartedAt(process.pid)
-  if (processStartedAt === undefined) throw new Error('cannot identify the CordisX launcher process')
-  for (let attempt = 0; attempt < 1; attempt += 1) {
-    let createdLock = false
-    try {
-      await mkdir(lockPath, { mode: 0o700 })
-      createdLock = true
-      const record: ProfileLeaseRecord = {
-        version: 1,
-        pid: process.pid,
-        processStartedAt,
-        token: randomUUID(),
-        userDataDir: resolvedProfile,
-      }
-      await writeFile(path.join(lockPath, 'owner.json'), `${JSON.stringify(record)}\n`, {
-        encoding: 'utf8',
-        flag: 'wx',
-        mode: 0o600,
-      })
-      let released = false
-      let releasing: Promise<void> | undefined
-      return Object.freeze({
-        userDataDir: resolvedProfile,
-        release: async () => {
-          if (released) return
-          if (releasing !== undefined) return await releasing
-          const operation = (async () => {
-            const current = parseProfileLeaseRecord(
-              await readFile(path.join(lockPath, 'owner.json'), 'utf8').catch(() => ''),
-            )
-            if (current?.token !== record.token) {
-              throw new Error(`Codex profile launch lease ownership changed: ${resolvedProfile}`)
-            }
-            await rm(lockPath, { recursive: true })
-            released = true
-          })()
-          releasing = operation
-          try {
-            await operation
-          } finally {
-            if (!released && releasing === operation) releasing = undefined
-          }
-        },
-      })
-    } catch (error) {
-      if (createdLock) {
-        await rm(lockPath, { recursive: true, force: true })
-        throw error
-      }
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      const owner = parseProfileLeaseRecord(await readFile(path.join(lockPath, 'owner.json'), 'utf8').catch(() => ''))
-      if (owner === undefined || owner.userDataDir !== resolvedProfile) {
-        throw new Error(`Codex profile is in use or has an unrecognized launch lock: ${resolvedProfile}`)
-      }
-      if (liveProcessStartedAt(owner.pid) === owner.processStartedAt) {
-        throw new Error(`Codex profile is in use by launcher process ${owner.pid}: ${resolvedProfile}`)
-      }
-      throw new Error(`Codex profile has a stale launch lock that requires inspection: ${resolvedProfile}`)
-    }
-  }
-  throw new Error(`Codex profile launch lease could not be acquired: ${resolvedProfile}`)
-}
 
 class ProcessOwnershipTracker {
   private readonly identities = new Map<number, string>()

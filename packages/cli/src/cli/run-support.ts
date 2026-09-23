@@ -565,7 +565,7 @@ export async function runInjectedHost(input: {
     }
     if (input.executable === undefined) throw new Error('host executable was not resolved')
     if (input.profile !== undefined && profileLease === undefined) {
-      profileLease = await acquireCodexProfileLaunchLease(input.profile.userDataDir)
+      profileLease = await acquireCodexProfileLaunchLease(input.profile.userDataDir, { stdout: input.stdout })
     }
     if (input.prelaunchedHost === undefined) {
       const hidden = input.hiddenUntilReady === true
