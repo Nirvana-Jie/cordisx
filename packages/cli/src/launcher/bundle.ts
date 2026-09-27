@@ -19,6 +19,9 @@ import { resolveOwningPackageVersion } from './package-version.js'
 export interface BuildRendererBundleOptions {
   /** Use only explicit CordisX Playground seats; never inspect Codex DOM. */
   readonly playground?: boolean
+  /** Host-private preview mode; normal launches retain the overlay presentation. */
+  readonly managerPresentationMode?: 'workspace'
+  readonly nativeAppVersion?: string
   readonly providerBridgeToken?: string
   readonly agentHistoryBridgeToken?: string
   readonly profileId?: string
@@ -348,6 +351,8 @@ export async function buildRendererCompositionSource(
   }, providers: ${JSON.stringify(providers)}, profileId: ${JSON.stringify(permission.profileId)}, permissionPolicies: ${
     JSON.stringify(permission.policies)
   }${options.playground === true ? ', hostKind: "playground"' : ''}${
+    options.managerPresentationMode === 'workspace' ? ', managerPresentationMode: "workspace"' : ''
+  }${options.nativeAppVersion === undefined ? '' : `, nativeAppVersion: ${JSON.stringify(options.nativeAppVersion)}`}${
     config.codex.agentLoopBackend === 'mock' ? `, agentLoopBackend: "mock"` : ''
   }${options.appId === undefined ? '' : `, appId: ${JSON.stringify(options.appId)}`}${
     options.iconThemePreference === undefined
@@ -464,6 +469,7 @@ return await ${boot}
       providers,
       profileId: permission.profileId,
       playground: options.playground === true,
+      managerPresentationMode: options.managerPresentationMode,
       agentLoopBackend: config.codex.agentLoopBackend,
       appId: options.appId,
       iconThemePreference: options.iconThemePreference,

@@ -19,7 +19,7 @@ import type { ManagerModel, ManagerSnapshot } from '../packages/cli/src/renderer
 import type { ManagedManagerPageMount, ManagerContentPresentation } from '../packages/cli/src/renderer/navigation.js'
 import { installReactCordisXManager } from '../packages/cli/src/renderer/manager/install.js'
 import { HostManagerNavigationController } from '../packages/cli/src/renderer/manager/navigation-controller.js'
-import type { NativeRouteSource } from '../packages/cli/src/renderer/manager/native-route-transition.js'
+import { bindNativeRailSelection, createNativeRouteSource } from './helpers/native-rail-navigation.js'
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
 
@@ -37,27 +37,6 @@ const previous = {
 }
 
 afterEach(() => Object.assign(globalThis, previous))
-
-function createNativeRouteSource(): NativeRouteSource & { navigate(): void } {
-  let index = 0
-  const listeners = new Set<() => void>()
-  return {
-    snapshot: () => ({
-      available: true,
-      key: `native-${index}`,
-      index,
-      nativeLocation: { pathname: index === 0 ? '/' : `/native/${index}`, search: '', hash: '' },
-    }),
-    subscribe: listener => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    navigate: () => {
-      index += 1
-      for (const listener of listeners) listener()
-    },
-  }
-}
 
 function snapshot(): ManagerSnapshot {
   return {
@@ -179,6 +158,7 @@ describe('programmatic Manager identity detail navigation', () => {
     Object.defineProperty(dom.window.Node.prototype, 'attachEvent', { value: () => {} })
     Object.defineProperty(dom.window.Node.prototype, 'detachEvent', { value: () => {} })
     const rail = document.querySelector<HTMLElement>('nav')!
+    bindNativeRailSelection(rail)
     const sidebarNavigation = document.querySelector<HTMLElement>('nav[role="navigation"]')!
     const sidebar = sidebarNavigation
     const sidebarHeader = document.getElementById('native-sidebar-header')!
@@ -277,7 +257,7 @@ describe('programmatic Manager identity detail navigation', () => {
       })
     }
     const trigger = () => document.querySelector<HTMLButtonElement>('[data-cordisx-manager-trigger]')!
-    const nativeRouteHistory = createNativeRouteSource()
+    const nativeRouteHistory = createNativeRouteSource(rail)
     try {
       await act(async () => {
         dispose = installReactCordisXManager(document, model, { nativeRouteHistory })
@@ -314,7 +294,9 @@ describe('programmatic Manager identity detail navigation', () => {
       })
       expect(document.querySelector('[data-cordisx-manager-pane]')).not.toBeNull()
       expect(document.querySelector('[data-cordisx-manager-modal]')).toBeNull()
-      expect(sidebar.querySelector('[data-cordisx-manager-sidebar-root] .cxr-nav')).not.toBeNull()
+      const hostNavigation = sidebar.closest('aside')!
+      expect(hostNavigation.querySelector('[data-cordisx-manager-sidebar-root] .cxr-nav')).not.toBeNull()
+      expect(hostNavigation.querySelector('[data-cordisx-manager-sidebar-root]')?.parentElement).toBe(hostNavigation)
       expect(anchor.querySelector('[data-cordisx-manager-pane] .cxr-main')).not.toBeNull()
       expect(anchor.querySelector('[data-cordisx-manager-pane] .cxr-header')).toBeNull()
       expect(titlebarMain.querySelector('[data-cordisx-manager-titlebar-seat] .cxr-heading')?.textContent)
@@ -325,9 +307,7 @@ describe('programmatic Manager identity detail navigation', () => {
       expect(hostTitlebar.style.right).toBe('auto')
       expect(hostTitlebar.style.pointerEvents).toBe('none')
       const nativeEndAction = document.getElementById('native-window-action') as HTMLButtonElement
-      const nativeEndClick = vi.fn()
-      nativeEndAction.addEventListener('click', nativeEndClick)
-      expect(nativeEndAction.closest('[aria-hidden="true"],[inert]')).toBeNull()
+      expect(nativeEndAction.closest('[aria-hidden="true"],[inert]')).not.toBeNull()
       expect(titlebarMain.querySelector('.cxr-header-seat [aria-label="Back"]')).toBeNull()
       expect(titlebarMain.querySelector('.cxr-header-seat .cordisx-host-icon')).not.toBeNull()
       expect(nativeTitle.getAttribute('aria-hidden')).toBe('true')
@@ -382,15 +362,34 @@ describe('programmatic Manager identity detail navigation', () => {
       expect(titlebarMain.querySelector('.cxr-header-seat [aria-label="Back"]')).toBeNull()
 
       await act(async () => {
-        sidebar.querySelector<HTMLButtonElement>('[data-tab="model-services"]')?.click()
+        hostNavigation.querySelector<HTMLButtonElement>('[data-tab="model-services"]')?.click()
       })
-      expect(sidebar.querySelector('[data-tab="model-services"]')?.getAttribute('aria-current')).toBe('page')
+      expect(hostNavigation.querySelector('[data-tab="model-services"]')?.getAttribute('aria-current')).toBe('page')
       expect(titlebarMain.querySelector('.cxr-heading')?.textContent).toContain('Model')
 
-      await act(async () => {
-        nativeEndAction.click()
-      })
-      expect(nativeEndClick).toHaveBeenCalledOnce()
+      const refreshedSidebar = sidebarScroll.cloneNode(true) as HTMLElement
+      refreshedSidebar.removeAttribute('aria-hidden')
+      refreshedSidebar.inert = false
+      refreshedSidebar.style.visibility = ''
+      sidebarScroll.replaceWith(refreshedSidebar)
+      await settleManager()
+      expect(document.querySelectorAll('[data-cordisx-manager-pane]')).toHaveLength(1)
+      expect(document.querySelectorAll('[data-cordisx-react-manager]')).toHaveLength(1)
+      expect(hostNavigation.querySelector('[data-tab="model-services"]')?.getAttribute('aria-current')).toBe('page')
+      expect(sidebarScroll.getAttribute('aria-hidden')).toBeNull()
+      expect(refreshedSidebar.getAttribute('aria-hidden')).toBe('true')
+      expect(refreshedSidebar.inert).toBe(true)
+      refreshedSidebar.replaceWith(sidebarScroll)
+      await settleManager()
+      expect(document.querySelector('[data-cordisx-manager-pane]')).not.toBeNull()
+      expect(refreshedSidebar.getAttribute('aria-hidden')).toBeNull()
+      expect(sidebarScroll.getAttribute('aria-hidden')).toBe('true')
+      sidebarHeader.remove()
+      sidebarScroll.remove()
+      await act(async () => await new Promise(resolve => setTimeout(resolve, 50)))
+      expect(document.querySelector('[data-cordisx-manager-pane]')).not.toBeNull()
+      sidebarNavigation.prepend(sidebarHeader, sidebarScroll)
+      await settleManager()
       expect(document.querySelector('[data-cordisx-manager-pane]')).not.toBeNull()
       await act(async () => trigger().click())
       expect(document.querySelector('[data-cordisx-manager-pane]')).toBeNull()
@@ -400,6 +399,7 @@ describe('programmatic Manager identity detail navigation', () => {
       expect(titlebarMain.querySelector('[data-cordisx-manager-titlebar-seat]')).toBeNull()
       expect(nativeTitle.getAttribute('aria-hidden')).toBeNull()
       expect(nativeTitle.style.visibility).toBe('')
+      expect(nativeEndAction.closest('[aria-hidden="true"],[inert]')).toBeNull()
       expect(sidebar.style.width).toBe('')
       expect(nativeResizer.inert).toBe(nativeResizerInert)
       expect(nativeResizer.style.visibility).toBe('')
@@ -478,7 +478,7 @@ describe('programmatic Manager identity detail navigation', () => {
       expect(document.querySelector('[data-cordisx-manager-pane]')).not.toBeNull()
 
       frame.removeAttribute('data-app-shell-thread-edge-divider')
-      await settleManager()
+      await act(async () => await new Promise(resolve => setTimeout(resolve, 200)))
       expect(document.querySelector('[data-cordisx-manager-pane],[data-cordisx-manager-modal]')).toBeNull()
       expect(frame.getAttribute('aria-hidden')).toBeNull()
       expect(frame.inert).toBe(originalInert)
@@ -488,9 +488,11 @@ describe('programmatic Manager identity detail navigation', () => {
       expect(sidebarScroll.inert).toBe(sidebarScrollInert)
       expect(titlebarMain.querySelector('[data-cordisx-manager-titlebar-seat]')).toBeNull()
       expect(nativeTitle.getAttribute('aria-hidden')).toBeNull()
-      expect(sidebar.querySelector('[data-cordisx-manager-sidebar-root]')).toBeNull()
+      expect(hostNavigation.querySelector('[data-cordisx-manager-sidebar-root]')).toBeNull()
       expect(document.querySelector('[data-cordisx-react-manager]')?.parentElement).toBe(document.body)
-      expect(document.querySelector('[data-sidebar-destination="builtin:home"]')?.hasAttribute('data-selected'))
+      expect(document.querySelector('[data-sidebar-destination="builtin:automations"]')?.getAttribute('aria-current'))
+        .toBe('page')
+      expect(document.querySelector('[data-sidebar-destination="builtin:automations"]')?.hasAttribute('data-selected'))
         .toBe(true)
     } finally {
       await act(async () => dispose?.())
@@ -515,7 +517,7 @@ describe('programmatic Manager identity detail navigation', () => {
         </header>
         <aside data-app-shell-left-panel-appearance="default"><div>
           <nav data-app-navigation-rail="true" aria-label="应用导航"><div>
-            <div><button data-sidebar-destination="builtin:home">Home</button></div>
+            <div><button data-sidebar-destination="builtin:home" aria-current="page" data-selected="">Home</button></div>
             <div><button data-sidebar-destination="builtin:automations">Automations</button></div>
             <div><button data-sidebar-destination="builtin:library">Library</button></div>
           </div></nav>
@@ -545,6 +547,7 @@ describe('programmatic Manager identity detail navigation', () => {
       Object.defineProperty(dom.window.Node.prototype, 'detachEvent', { value: () => {} })
       const document = dom.window.document
       const rail = document.querySelector<HTMLElement>('nav')!
+      bindNativeRailSelection(rail)
       const aside = document.querySelector<HTMLElement>('aside')!
       const header = document.querySelector<HTMLElement>('header')!
       const headerStart = header.querySelector<HTMLElement>('[data-app-shell-header-slot="start"]')!
@@ -612,7 +615,7 @@ describe('programmatic Manager identity detail navigation', () => {
         setPluginBlocked: async () => {},
         setPermissionPolicy: async () => {},
       } as unknown as ManagerModel
-      const nativeRouteHistory = createNativeRouteSource()
+      const nativeRouteHistory = createNativeRouteSource(rail)
       let dispose: (() => void) | undefined
       try {
         await act(async () => {
@@ -717,9 +720,7 @@ describe('programmatic Manager identity detail navigation', () => {
         await act(async () => trigger.click())
         expect(document.querySelector('[data-cordisx-manager-pane]')).not.toBeNull()
         frame.removeAttribute('data-app-shell-thread-edge-divider')
-        await act(async () => {
-          await new Promise(resolve => setTimeout(resolve, 0))
-        })
+        await act(async () => await new Promise(resolve => setTimeout(resolve, 200)))
         expect(document.querySelector('[data-cordisx-manager-pane]')).toBeNull()
         expect(frame.inert).toBe(originalFrameInert)
         expect(anchor.querySelector('[data-cordisx-manager-sidebar-root]')).toBeNull()
@@ -735,7 +736,7 @@ describe('programmatic Manager identity detail navigation', () => {
       `<!doctype html><body>
       <aside data-app-shell-left-panel-appearance="default">
         <nav data-app-navigation-rail="true" aria-label="应用导航"><div>
-          <div><button data-sidebar-destination="builtin:home">Home</button></div>
+          <div><button data-sidebar-destination="builtin:home" aria-current="page" data-selected="">Home</button></div>
           <div><button data-sidebar-destination="builtin:automations">Automations</button></div>
         </div></nav>
         <nav aria-label="设置"><div>Native Settings</div></nav>
@@ -761,6 +762,7 @@ describe('programmatic Manager identity detail navigation', () => {
     const document = dom.window.document
     const aside = document.querySelector<HTMLElement>('aside')!
     const rail = document.querySelector<HTMLElement>('nav[data-app-navigation-rail]')!
+    bindNativeRailSelection(rail)
     const navigation = document.querySelector<HTMLElement>('nav[aria-label="设置"]')!
     const nativeResizer = document.getElementById('native-resizer')!
     const main = document.querySelector<HTMLElement>('[data-app-shell-main-content-layout]')!
@@ -852,6 +854,7 @@ describe('programmatic Manager identity detail navigation', () => {
       const titlebar = document.querySelector<HTMLElement>('[data-cordisx-manager-titlebar-seat]')
       expect(document.querySelector('[data-cordisx-manager-pane]')).not.toBeNull()
       expect(navWidth()).toBe(420)
+      expect(separator.getAttribute('aria-valuemin')).toBe('238')
       expect(main.getBoundingClientRect().left).toBe(472.5)
       expect(titlebar?.getBoundingClientRect().left).toBe(472.5)
       expect(titlebar?.getBoundingClientRect().right).toBeLessThanOrEqual(1683)
@@ -863,9 +866,9 @@ describe('programmatic Manager identity detail navigation', () => {
         await new Promise(resolve => setTimeout(resolve, 0))
       })
       expect(document.querySelector('[data-cordisx-manager-pane]')).not.toBeNull()
-      expect(navWidth()).toBe(180)
-      expect(main.getBoundingClientRect().left).toBe(232.5)
-      expect(titlebar?.getBoundingClientRect().left).toBe(290)
+      expect(navWidth()).toBe(238)
+      expect(main.getBoundingClientRect().left).toBe(290.5)
+      expect(titlebar?.getBoundingClientRect().left).toBe(290.5)
       expect(titlebar?.getBoundingClientRect().right).toBeLessThanOrEqual(1683)
     } finally {
       await act(async () => dispose?.())

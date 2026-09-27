@@ -61,6 +61,16 @@
   );
   pointer-events: none;
 }
+.cxr-titlebar-root[data-cordisx-manager-title-divider="true"]::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 1px;
+  background: var(--cx-border, #d3d8de);
+  pointer-events: none;
+  content: "";
+}
 .cxr-titlebar-root .cxr-header {
   width: 100%;
   min-width: 0;

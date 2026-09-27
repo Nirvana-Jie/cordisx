@@ -103,6 +103,11 @@
 [data-cordisx-manager-rail-item] .cxr-trigger[aria-current="page"] {
   background: var(--cx-hover, color-mix(in srgb, currentColor 9%, transparent));
 }
+nav[data-app-navigation-rail="true"]
+  button[data-cordisx-manager-native-selection-suppressed="true"]::before {
+  background-color: transparent !important;
+  background-image: none !important;
+}
 .cxr-backdrop {
   position: fixed;
   inset: 0;
